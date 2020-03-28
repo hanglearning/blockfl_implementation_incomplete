@@ -58,17 +58,22 @@ class Blockchain:
 class Device:
 	def __init__(self, idx):
 		self._idx = idx
-		self._data = None
-		# weight dimentionality has to be the same as the data vector
-        self._global_weight = None
-		self._global_gradients = None
 		# by default, a device is created as a worker
 		self._is_miner = False
+		''' attributes for workers '''
+		# data is a python list of samples, within which each data sample is a dictionary of {x, y}, where x is a numpy column vector and y is a scalar value
+		self._data = []
+		# weight dimentionality has to be the same as the dim of the data column vector
+        self._global_weight_vector = None
+		# self._global_gradients = None
+		self._step_size = None
 		# data dimensionality has to be predefined as an positive integer
 		self._data_dim = None
+		# sample size(Ni)
+		self._sample_size = None
 		# miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth
 		self._blockchain = Blockchain()
-		# only for miner
+		''' attributes for miners '''
 		self._unmined_transactions = []
 
 	# set data dimension
@@ -86,34 +91,48 @@ class Device:
 
 	''' Functions for Workers '''
 
-	# worker device global weight initialization or update
+	def worker_set_sample_size(self, sample_size):
+		if self._is_miner:
+			sys.exit("Sample size is not required for miners.")
+		else:
+			self._sample_size = sample_size
+
+	def worker_set_step_size(self, step_size):
+		if self._is_miner:
+			sys.exit("Step size is only for workers to calculate weight updates.")
+		else:
+			if step_size <= 0:
+				sys.exit("Step size has to be positive.")
+			else:
+				self._step_size = step_size
+
+	def worker_generate_dummy_data(self):
+		# https://stackoverflow.com/questions/15451958/simple-way-to-create-matrix-of-random-numbers
+		if self._is_miner:
+			sys.exit("Miner does not own data samples to update.")
+		else:
+			if not self._data:
+				for _ in range(self._sample_size):
+					self._data.append({'x': np.random.randint(0, high=20, size=(self._data_dim, 1)), 'y': np.random.randint(0, high=20)})
+			else:
+				sys.exit("The data of this worker has already been initialized.")
+
+	# worker global weight initialization or update
 	def worker_set_global_weihgt(self, weight=None):
-		if not self._is_miner:
+		if self._is_miner:
+			sys.exit("Miner does not set weight values")
+		else:
 			if not weight:
-				# if not updating, initialize with all 0s
-				# TODO Need to ask authors what's the initial states for all the devices. Shall they have the same global weights, or can be different
-				self._global_weight = np.zeros((self._data_dim, 1))
-				# for _ in self._data_dim:
-				# 	self._global_weight.append(random.uniform(0, 1))
+				# if not updating, initialize with all very small values, as directed by Dr. Park
+				self._global_weight_vector = np.random.rand(self._data_dim, 1)
 			else:
 				self._global_weight = weight
-		else:
-			sys.exit("Miner does not set weight values")
-
-	# worker data sample initialization
-	def worker_set_data_samples(self, data):
-		# data is a collection of data points, and each data point {x, y} has a len(self._data_dim)-dim column vector x and a scalar value y. For simplicity, each data point is represented as a tuple, e.g. data = [(a, 3), (b, 4)...] where a and b are column vectors with len(self._data_dim)-dim in mumpy format
-		if not self._is_miner:
-			if data[0][0].shape[0] != self._global_weight.shape[0]:
-				sys.exit("feature dimentionality has to be the same with the weight vector")
-			self._data = data
-		else:
-			sys.exit("Miner does not initilize data points")
+			
 	
 	# BlockFL step 1 - train with regression
 	# return local computation time, and delta_fk(wl) as a list
 	# global_gradient is calculated after updating the global_weights
-	def worker_local_update(self, step_size):
+	def worker_local_update(self):
 		# SVRG algo, BlockFL section II and reference[4] 3.2
 		# gradient of loss function chosen - mean squared error
 		# delta_fk(wl)
@@ -240,8 +259,18 @@ class Device:
 	
 ''' Questions
 	1. Who's in charge of assigning which devices are workers and which are the miners, if there is not a central server? Self assign?
+'''
 
 # useful docs
-''' numpy create a vector https://www.oreilly.com/library/view/machine-learning-with/9781491989371/ch01.html '''
+''' 
+numpy create a vector https://www.oreilly.com/library/view/machine-learning-with/9781491989371/ch01.html 
 
+seems int operations are faster than float, so use column vector that are full of ints http://nicolas.limare.net/pro/notes/2014/12/12_arit_speed/ 
+
+not like pytorch, numpy doesn't support derived differentiation(gradient) calculation.
+https://stackoverflow.com/questions/16078818/calculating-gradient-with-numpy
+Use sympy
+https://www.geeksforgeeks.org/python-sympy-derivative-method/
+
+'''
 
