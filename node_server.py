@@ -1,7 +1,7 @@
 import sys
 import random
 import time
-import numpy as np
+import torch
 
 import json
 from hashlib import sha256
@@ -113,7 +113,7 @@ class Device:
 		else:
 			if not self._data:
 				for _ in range(self._sample_size):
-					self._data.append({'x': np.random.randint(0, high=20, size=(self._data_dim, 1)), 'y': np.random.randint(0, high=20)})
+					self._data.append({'x': torch.randint(0, high=20, size=(self._data_dim, 1)), 'y': torch.randint(0, high=20, size=(1, 1))})
 			else:
 				sys.exit("The data of this worker has already been initialized.")
 
@@ -124,29 +124,33 @@ class Device:
 		else:
 			if not weight:
 				# if not updating, initialize with all very small values, as directed by Dr. Park
-				self._global_weight_vector = np.random.rand(self._data_dim, 1)
+				self._global_weight_vector = torch.rand(self._data_dim, 1)
 			else:
-				self._global_weight = weight
+				self._global_weight_vector = weight
 			
 	
 	# BlockFL step 1 - train with regression
 	# return local computation time, and delta_fk(wl) as a list
 	# global_gradient is calculated after updating the global_weights
 	def worker_local_update(self):
-		# SVRG algo, BlockFL section II and reference[4] 3.2
-		# gradient of loss function chosen - mean squared error
-		# delta_fk(wl)
-		gradients_global_per_data_point = []
-		# initialize local weights as the (recalculated) global weights
-		local_weight = self._global_weight
-		# ref - https://stackoverflow.com/questions/3620943/measuring-elapsed-time-with-the-time-module
-		start_time = time.time()
-		# iterations = the number of data points in a device
-		for data_point in self._data:
-			local_weight = local_weight - (step_size/len(self._data)) * (data_point[0].transpose()@local_weight - data_point[1])
+		if self._is_miner:
+			sys.exit("Miner does not perfrom gradient calculations.")
+		else:
+			# SVRG algo, BlockFL section II and reference[4] 3.2
+			# gradient of loss function chosen - mean squared error
+			# delta_fk(wl)
+			global_gradients_per_data_point = []
+			# initialize the local weights as the current global weights
+			local_weight = self._global_weight_vector
+			# ref - https://stackoverflow.com/questions/3620943/measuring-elapsed-time-with-the-time-module
+			start_time = time.time()
+			# iterations = the number of data points in a device
+			# TODO function(1)
+			for data_point in self._data:
+				local_weight = local_weight - (step_size/len(self._data)) * (data_point[0].transpose()@local_weight - data_point[1])
 
-			self._global_weight[data_iter] = self._global_weight - (step_size/iterations) * ()
-		return time.time() - start_time
+				self._global_weight[data_iter] = self._global_weight - (step_size/iterations) * ()
+			return time.time() - start_time
 
 	''' Functions for Miners '''
 
@@ -263,14 +267,13 @@ class Device:
 
 # useful docs
 ''' 
-numpy create a vector https://www.oreilly.com/library/view/machine-learning-with/9781491989371/ch01.html 
+pytorch create a vector https://pytorch.org/docs/stable/torch.html 
 
-seems int operations are faster than float, so use column vector that are full of ints http://nicolas.limare.net/pro/notes/2014/12/12_arit_speed/ 
+seems int operations are faster than float, so use column vector that are full of ints http://nicolas.limare.net/pro/notes/2014/12/12_arit_speed/
 
-not like pytorch, numpy doesn't support derived differentiation(gradient) calculation.
-https://stackoverflow.com/questions/16078818/calculating-gradient-with-numpy
-Use sympy
-https://www.geeksforgeeks.org/python-sympy-derivative-method/
+create torch tensor from np array https://pytorch.org/docs/stable/tensors.html
 
+use pytorch autograd to calculate gradients
+https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html#sphx-glr-beginner-blitz-autograd-tutorial-py
 '''
 
