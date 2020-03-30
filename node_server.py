@@ -39,6 +39,10 @@ class Block:
 	def get_block_idx(self):
 		return self._idx
 
+	def get_transactions(self):
+		# get the updates from this block
+		return self._transactions
+
 class Blockchain:
 
     # for PoW
@@ -123,8 +127,9 @@ class Device:
 			sys.exit("Miner does not set weight values")
 		else:
 			if not weight:
-				# if not updating, initialize with all very small values, as directed by Dr. Park
-				self._global_weight_vector = torch.rand(self._data_dim, 1)
+				# if not updating, initialize with all 0s, as directed by Dr. Park
+				# Or, we should hard code a vector with some small values for the device class as it has to be the same for every device
+				self._global_weight_vector = torch.zeros(self._data_dim, 1)
 			else:
 				self._global_weight_vector = weight
 			
@@ -142,14 +147,45 @@ class Device:
 			global_gradients_per_data_point = []
 			# initialize the local weights as the current global weights
 			local_weight = self._global_weight_vector
+			# calculate delta_f(wl)
+			last_block = self._blockchain.get_last_block()
+			if last_block is not None:
+				transactions = last_block.get_transactions()
+				# transactions = [{'updated_weigts': w, 'updated_gradients': [f1wl, f2wl ... fnwl]} ... ]
+				tensor_accumulator = torch.zeros_like(self._global_weight_vector)
+				for update_per_device in transactions:
+					for data_point_gradient in update_per_device['updated_gradients']:
+						tensor_accumulator += data_point_gradient
+				num_of_device_updates = len(transactions)
+				delta_f_wl = tensor_accumulator/(num_of_device_updates * self._sample_size)
+			else:
+				# chain is empty now as this is the first epoch. To keep it consistent, we set delta_f_wl as 0 tensors
+				delta_f_wl = torch.zeros_like(self._global_weight_vector)
 			# ref - https://stackoverflow.com/questions/3620943/measuring-elapsed-time-with-the-time-module
 			start_time = time.time()
 			# iterations = the number of data points in a device
 			# TODO function(1)
 			for data_point in self._data:
-				local_weight = local_weight - (step_size/len(self._data)) * (data_point[0].transpose()@local_weight - data_point[1])
 
-				self._global_weight[data_iter] = self._global_weight - (step_size/iterations) * ()
+				local_weight_track_grad = torch.tensor(local_weight, requires_grad=True)
+				# loss of one data point with current local update fk_wil
+				fk_wil = (data_point['x'].t()@local_weight_track_grad - data_point['y'])**2/2
+				# calculate delta_fk_wil
+				fk_wil.backward()
+				delta_fk_wil = local_weight_track_grad.grad
+
+				last_global_weight_track_grad = torch.tensor(self._global_weight_vector, requires_grad=True)
+				# loss of one data point with last updated global weights fk_wl
+				fk_wl = (data_point['x'].t()@last_global_weight_track_grad - data_point['y'])**2/2
+				# calculate delta_fk_wl
+				fk_wl.backward()
+				delta_fk_wl = last_global_weight_track_grad.grad
+				# record this value to update
+				global_gradients_per_data_point.append(delta_fk_wl)
+
+				# calculate local update
+				local_weight = local_weight - (step_size/len(self._data)) * (delta_fk_wil - delta_fk_wl+ delta_f_wl)
+
 			return time.time() - start_time
 
 	''' Functions for Miners '''
