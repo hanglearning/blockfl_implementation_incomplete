@@ -2,12 +2,14 @@ import sys
 import random
 import time
 import torch
+import os
+import binascii
 
 import json
 from hashlib import sha256
 
 
-# reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/#7-establish-consensus-and-decentralization
+# reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
     def __init__(self, idx, transactions, timestamp, previous_hash, nonce=0):
         self._idx = idx
@@ -93,6 +95,10 @@ class Device:
 		else:
 			self._is_miner = False
 
+	def is_miner(self):
+		return self.is_miner
+
+
 	''' Functions for Workers '''
 
 	def worker_set_sample_size(self, sample_size):
@@ -126,7 +132,7 @@ class Device:
 		if self._is_miner:
 			sys.exit("Miner does not set weight values")
 		else:
-			if not weight:
+			if not self._global_weight_vector:
 				# if not updating, initialize with all 0s, as directed by Dr. Park
 				# Or, we should hard code a vector with some small values for the device class as it has to be the same for every device
 				self._global_weight_vector = torch.zeros(self._data_dim, 1)
@@ -186,7 +192,7 @@ class Device:
 				# calculate local update
 				local_weight = local_weight - (step_size/len(self._data)) * (delta_fk_wil - delta_fk_wl+ delta_f_wl)
 
-			return time.time() - start_time
+			return local_weight, global_gradients_per_data_point， time.time() - start_time
 
 	''' Functions for Miners '''
 
@@ -295,7 +301,40 @@ class Device:
 
 		return False
 
-	
+app = Flask(__name__)
+
+# pre-defined and agreed fields
+data_dim = 10
+sample_size = 20
+step_size = 3
+
+# create a device with a 4 bytes (8 hex chars) id
+device = Device(binascii.b2a_hex(os.urandom(4)).decode('utf-8'))
+# set data dimension
+set_data_dim(data_dim)
+# the device's copy of blockchain
+blockchain = Blockchain()
+
+# start the app
+# assign tasks based on role
+@app.route('/')
+def runApp():
+	# assign/change role of this device
+	device.set_miner()
+	if device.is_miner():
+		
+	else:
+		device.worker_set_sample_size(sample_size)
+		device.worker_set_step_size(3)
+		# TODO first do consensus to get the longest blockchain from peers
+		device.worker_generate_dummy_data()
+
+
+
+# the address to other participating members of the network
+peers = set()
+
+
 	
 ''' Questions
 	1. Who's in charge of assigning which devices are workers and which are the miners, if there is not a central server? Self assign?
