@@ -167,8 +167,11 @@ class Device:
 			miner_nodes = []
 			for node in peers:
 				response = requests.get(f'{node}/get_role')
-				if response.text == 'True':
-					miner_nodes.append(node)
+				if response.status_code == 200:
+					if response.text == 'True':
+						miner_nodes.append(node)
+				else:
+					return "Error in worker_associate_minder()", response.status_code
 		# associate a random miner
 		if miner_nodes:
 			return random.choice(miner_nodes)
@@ -180,10 +183,31 @@ class Device:
 		if self._is_miner:
 			print("Worker does not accept other workers' updates directly")
 		else:
-			miner_upload_endpoint = f"{miner_address}/new_transaction"
-			requests.post(miner_upload_endpoint,
-                  json=upload,
-                  headers={'Content-type': 'application/json'})
+			# check if worker and miner are in the same epoch
+			response = requests.get(f'{miner_address}/return_miner_epoch')
+			if response.status_code == 200:
+				miner_epoch = int(response.text)
+				if miner_epoch == len(self._blockchain.chain) + 1:
+					# check if miner is within the wait time of accepting updates
+					response_miner_accepting = requests.get(f'{miner_address}/within_miner_wait_time')
+					if response_miner_accepting.status_code == 200:
+						is_miner_accepting = response_miner_accepting.text
+						if is_miner_accepting == "True":
+							miner_upload_endpoint = f"{miner_address}/new_transaction"
+							requests.post(miner_upload_endpoint,
+								json=upload,
+								headers={'Content-type': 'application/json'})
+						else:
+							# TODO What to do next?
+							return "Not within miner waiting time."
+					else:
+						return "Error getting miner waiting status", response_miner_accepting.status_code
+				else:
+					# TODO not performing the same epoch, resync the chain
+					# consensus()?
+			else:
+				return "Error getting miner epoch", response.status_code
+			
 
 	# BlockFL step 1 - train with regression
 	# return local computation time, and delta_fk(wl) as a list
@@ -367,6 +391,8 @@ MINER_WAITING_TIME = 180
 
 PROMPT = ">>>"
 
+miner_accept_updates = False
+
 # the address to other participating members of the network
 peers = set()
 
@@ -376,9 +402,40 @@ device = Device(binascii.b2a_hex(os.urandom(4)).decode('utf-8'))
 # set data dimension
 device.set_data_dim(DATA_DIM)
 
+def miner_set_wait_time():
+	if device.is_miner:
+		global miner_accept_updates
+		miner_accept_updates = True
+		print(f"{PROMPT} Miner wait time {MINER_WAITING_TIME}s, waiting for updates...")
+		time.sleep(MINER_WAITING_TIME)
+		miner_accept_updates = False
+	else:
+		# TODO make return more reasonable
+		return "error"
+
 @app.route('/get_role', methods=['GET'])
 def return_role():
 	return "True" if device.is_miner() else "False"
+
+def current_epoch():
+	# also used while worker uploading the updates. 
+	# If epoch doesn't match, one of the entity has to resync the chain
+	return len(device.get_blockchain().chain) + 1
+
+@app.route('/return_miner_epoch', methods=['GET'])
+def return_miner_epoch():
+	if device.is_miner:
+		return str(current_epoch())
+	else:
+		# TODO make return more reasonable
+		return "error"
+
+
+# end point for worker to check whether the miner is now accepting the dates(within miner's wait time)
+@app.route('/within_miner_wait_time', methods=['GET'])
+def within_miner_wait_time():
+	global miner_accept_updates
+	return "True" if miner_accept_updates else "False"
 
 # endpoint to for worker to upload updates to the associated miner
 @app.route('/new_transaction', methods=['POST'])
@@ -410,13 +467,17 @@ def runApp():
 
 	# TODO change to < EPSILON
 	while True:
-		print(f"Starting epoch {len(device.get_blockchain().chain)+1}")
+		print(f"Starting epoch {}")
 		# assign/change role of this device
 		device.set_miner()
 		if device.is_miner():
 			print(f"{PROMPT} This is Miner with ID {device.get_idx()}")
-			# verify uploads? How?
-
+			# waiting for worker's updates 
+			# TODO while sleeping, check block size by first obtaining amount of workers then when #(tx) = #(workers), abort the timer 
+			miner_set_wait_time()
+			# TODO verify uploads? How?
+			# miner mine transactions
+			# START FROM HERE 4/9/20
 		else:
 			print(f"{PROMPT} This is workder with ID {device.get_idx()}")
 			# while registering, chain was synced, if any
