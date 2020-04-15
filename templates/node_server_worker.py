@@ -8,21 +8,6 @@ import binascii
 import json
 from hashlib import sha256
 
-ALWAYS_MINER = False
-ALWAYS_WORKER = False
-
-try:
-	user_role_set = sys.argv[1]
-	if user_role_set == '--m':
-		ALWAYS_MINER  = True
-	elif user_role_set == '--w':
-		ALWAYS_WORKER = True
-	else:
-		sys.exit("Role input error - please input only --m or --w.")
-except:
-	pass
-
-
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
     def __init__(self, idx, transactions, timestamp, previous_hash, nonce=0):
@@ -69,6 +54,9 @@ class Blockchain:
 		# technically this should be _chain as well
         self.chain = []
 
+    def get_chain_length(self):
+        return len(self.chain)
+
     def get_last_block(self):
         if len(self.chain) > 0:
             return self.chain[-1]
@@ -76,10 +64,9 @@ class Blockchain:
             # blockchain doesn't even have its genesis block
             return None
 
-class Device:
+class Worker:
 	def __init__(self, idx):
 		self._idx = idx
-		# by default, a device is created as a worker
 		self._is_miner = False
 		''' attributes for workers '''
 		# data is a python list of samples, within which each data sample is a dictionary of {x, y}, where x is a numpy column vector and y is a scalar value
@@ -94,9 +81,8 @@ class Device:
 		self._sample_size = None
 		# miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth
 		self._blockchain = Blockchain()
-		''' attributes for miners '''
-		self._unmined_transactions = []
 
+    ''' getters '''
 	# get device id
 	def get_idx(self):
 		return self._idx
@@ -105,22 +91,20 @@ class Device:
 	def get_blockchain(self):
 		return self._blockchain
 
+    def get_current_epoch(self):
+        return self._blockchain.get_chain_length()+1
+
+    def get_data(self):
+        return self._data
+
 	# get global_weight_vector, used while being the register_with node to sync with the registerer node
 	def get_global_weight_vector(self):
 		return self._global_weight_vector
 
+    ''' setters '''
 	# set data dimension
 	def set_data_dim(self, data_dim)
 		self._data_dim = data_dim
-
-	# change role to miner by self assigning
-	def set_miner(self):
-		# flip a coin
-		flip = random.randint(0, 1)
-		if flip == 0:
-			self._is_miner = True
-		else:
-			self._is_miner = False
 
 	# set the consensused blockchain
 	def set_blockchain(self, blockchain):
@@ -128,7 +112,6 @@ class Device:
 
 	def is_miner(self):
 		return self.is_miner
-
 
 	''' Functions for Workers '''
 
@@ -178,49 +161,55 @@ class Device:
 			return None
 		else:
 			global peers
-			miner_nodes = []
+			miner_nodes = set()
 			for node in peers:
 				response = requests.get(f'{node}/get_role')
 				if response.status_code == 200:
-					if response.text == 'True':
-						miner_nodes.append(node)
+					if response.text == 'Miner':
+						miner_nodes.add(node)
 				else:
 					return "Error in worker_associate_minder()", response.status_code
 		# associate a random miner
 		if miner_nodes:
-			return random.choice(miner_nodes)
+			return random.sample(miner_nodes, 1)[0]
 		else:
 			# no device in this epoch is assigned as a miner
 			return None
 	
+    # TODO
 	def worker_upload_to_miner(self, upload, miner_address):
 		if self._is_miner:
 			print("Worker does not accept other workers' updates directly")
 		else:
-			# check if worker and miner are in the same epoch
-			response = requests.get(f'{miner_address}/return_miner_epoch')
-			if response.status_code == 200:
-				miner_epoch = int(response.text)
-				if miner_epoch == len(self._blockchain.chain) + 1:
-					# check if miner is within the wait time of accepting updates
-					response_miner_accepting = requests.get(f'{miner_address}/within_miner_wait_time')
-					if response_miner_accepting.status_code == 200:
-						is_miner_accepting = response_miner_accepting.text
-						if is_miner_accepting == "True":
-							miner_upload_endpoint = f"{miner_address}/new_transaction"
-							requests.post(miner_upload_endpoint,
-								json=upload,
-								headers={'Content-type': 'application/json'})
-						else:
-							# TODO What to do next?
-							return "Not within miner waiting time."
-					else:
-						return "Error getting miner waiting status", response_miner_accepting.status_code
-				else:
-					# TODO not performing the same epoch, resync the chain
-					# consensus()?
-			else:
-				return "Error getting miner epoch", response.status_code
+            checked = False
+            # check if node is still a miner
+            response = requests.get(f'{miner_address}/get_role')
+				if response.status_code == 200:
+					if response.text == 'Miner':
+                        # check if worker and miner are in the same epoch
+                        response_epoch = requests.get(f'{miner_address}/return_miner_epoch')
+                        if response_epoch.status_code == 200:
+                            miner_epoch = int(response_epoch.text)
+                            if miner_epoch == self.get_current_epoch():
+                                checked = True
+                            else:
+                                # TODO not performing the same epoch, resync the chain
+                                # consensus()?
+            if checked:
+                # check if miner is within the wait time of accepting updates
+                response_miner_accepting = requests.get(f'{miner_address}/within_miner_wait_time')
+                if response_miner_accepting.status_code == 200:
+                    if response_miner_accepting.text == "True":
+                        miner_upload_endpoint = f"{miner_address}/new_transaction"
+                        requests.post(miner_upload_endpoint,
+                            json=upload,
+                            headers={'Content-type': 'application/json'})
+                    else:
+                        # TODO What to do next?
+                        return "Not within miner waiting time."
+                else:
+                    return "Error getting miner waiting status", response_miner_accepting.status_code
+            
 			
 
 	# BlockFL step 1 - train with regression
@@ -279,51 +268,6 @@ class Device:
 
 	# TODO
 	# def worker_global_update(self):
-
-	''' Functions for Miners '''
-
-	# TODO rewards
-	def proof_of_work(self, candidate_block):
-		''' Brute Force the nonce. May change to PoS by Dr. Jihong Park '''
-		if self._is_miner:
-			current_hash = candidate_block.compute_hash()
-			while not current_hash.startswith('0' * Blockchain.difficulty):
-				candidate_block.nonce_increment()
-				current_hash = candidate_block.compute_hash()
-			# return the qualified hash as a PoW proof, to be verified by other devices before adding the block
-			# also set its hash as well. _block_hash is the same as pow proof
-			candidate_block.set_hash()
-			return current_hash
-		else:
-			print('Worker does not perform PoW.')
-	
-	# TODO cross-verification, method to verify updates, and make use of check_pow_proof
-	# def cross-verification()
-
-	def miner_receive_worker_updates(self, transaction):
-		if self._is_miner:
-			self._unmined_transactions.append(transaction)
-		else:
-			print("Worker cannot receive other workers' updates.")
-
-	# TODO return pow_proof?
-	def miner_mine_transactions(self):
-		if self._is_miner:
-			if self._unmined_transactions:	
-				# get the last block and construct the candidate block
-				last_block = self._blockchain.get_last_block()
-
-				candidate_block = Block(idx=last_block.get_block_idx+1,
-				transactions=self._unmined_transactions,
-				timestamp=time.time(),
-				previous_hash=last_block.get_previous_hash())
-				# mine the candidate block by PoW, inside which the _block_hash is also set
-				pow_proof = self.proof_of_work(candidate_block)
-				#TODO broadcast the block
-			else:
-				print("No transaction to mine.")
-		else:
-			print("Worker does not mine transactions.")
 
 	''' Common Methods '''
 
@@ -401,78 +345,40 @@ DATA_DIM = 10
 SAMPLE_SIZE = 20
 STEP_SIZE = 3
 EPSILON = 0.02
-# miner waits for 180s to fill its candidate block with updates from devices
-MINER_WAITING_TIME = 180
 
 PROMPT = ">>>"
-
-miner_accept_updates = False
 
 # the address to other participating members of the network
 peers = set()
 
-# create a device with a 4 bytes (8 hex chars) id
+# create a worker with a 4 bytes (8 hex chars) id
 # the device's copy of blockchain also initialized
-device = Device(binascii.b2a_hex(os.urandom(4)).decode('utf-8'))
-# set data dimension
-device.set_data_dim(DATA_DIM)
-
-def miner_set_wait_time():
-	if device.is_miner:
-		global miner_accept_updates
-		miner_accept_updates = True
-		print(f"{PROMPT} Miner wait time set to {MINER_WAITING_TIME}s, waiting for updates...")
-		time.sleep(MINER_WAITING_TIME)
-		miner_accept_updates = False
-	else:
-		# TODO make return more reasonable
-		return "error"
+device = Worker(binascii.b2a_hex(os.urandom(4)).decode('utf-8'))
 
 @app.route('/get_role', methods=['GET'])
 def return_role():
-	return "True" if device.is_miner() else "False"
+	return "Worker"
 
-def current_epoch():
-	# also used while worker uploading the updates. 
-	# If epoch doesn't match, one of the entity has to resync the chain
-	return len(device.get_blockchain().chain) + 1
+@app.route('/get_worker_data', methods=['GET'])
+def return_data():
+	json.dumps({"data": device.get_data()})
 
-@app.route('/return_miner_epoch', methods=['GET'])
-def return_miner_epoch():
-	if device.is_miner:
-		return str(current_epoch())
+# used while miner check for block size in miner_receive_worker_updates()
+@app.route('/get_worker_epoch', methods=['GET'])
+def get_worker_epoch():
+	if not device.is_miner:
+		return str(device.get_current_epoch())
 	else:
 		# TODO make return more reasonable
 		return "error"
-
-
-# end point for worker to check whether the miner is now accepting the dates(within miner's wait time)
-@app.route('/within_miner_wait_time', methods=['GET'])
-def within_miner_wait_time():
-	global miner_accept_updates
-	return "True" if miner_accept_updates else "False"
-
-# endpoint to for worker to upload updates to the associated miner
-@app.route('/new_transaction', methods=['POST'])
-def new_transaction():
-    update_data = request.get_json()
-    required_fields = ["device_id", "local_weight_update", "global_gradients_per_data_point", "computation_time"]
-
-    for field in required_fields:
-        if not update_data.get(field):
-            return "Invalid transaction(update) data", 404
-
-    update_data["timestamp"] = time.time()
-    device.miner_receive_worker_updates(update_data)
-
-    return "Success", 201
-
 
 # start the app
 # assign tasks based on role
 # @app.route('/')
 def runApp():
 
+    print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
+    device.set_data_dim(DATA_DIM)
 	print(f"{PROMPT} Device is setting sample size {SAMPLE_SIZE}")
 	device.worker_set_sample_size(SAMPLE_SIZE)
 	print(f"{PROMPT} Step size set to {STEP_SIZE}")
@@ -482,29 +388,28 @@ def runApp():
 
 	# TODO change to < EPSILON
 	while True:
-		print(f"Starting epoch {len(device.get_blockchain.chain)+1}...")
-		# assign/change role of this device
-		device.set_miner()
-		if device.is_miner():
-			print(f"{PROMPT} This is Miner with ID {device.get_idx()}")
-			# waiting for worker's updates 
-			# TODO while sleeping, check block size by first obtaining amount of workers then when #(tx) = #(workers), abort the timer 
-			miner_set_wait_time()
-			# TODO verify uploads? How?
-			# miner mine transactions
-			# START FROM HERE 4/9/20
-			# 4/14/20 Divide into 2 class files to make things easy then combine to realize the random assign role for each epoch functionality
-		else:
-			print(f"{PROMPT} This is workder with ID {device.get_idx()}")
-			# while registering, chain was synced, if any
-			print(f"{PROMPT} Workder is performing Step1 - local update")
-			upload = device.worker_local_update()
-			# worker associating with miner
-			miner_address = device.worker_associate_minder()
-			if device.worker_associate_minder() is not None:
-				print(f"{PROMPT} Workder {device.get_idx()} now assigned to miner with address {miner_address}.")
-			# worker uploads data to miner
-			device.worker_upload_to_miner(upload, miner_address)
+        print(f"{PROMPT} This is workder with ID {device.get_idx()}")
+        print(f"Starting epoch {device.get_current_epoch()}...")
+        # while registering, chain was synced, if any
+        print(f"{PROMPT} Worker is performing Step1 - local update...")
+        upload = device.worker_local_update()
+        # used for debugging
+        print("Local updates done.")
+        print(f"local_weight_update: {upload["local_weight_update"]}")
+        print(f"global_gradients_per_data_point: {upload["global_gradients_per_data_point"]}")
+        print(f"computation_time: {upload["computation_time"]}")
+        # worker associating with miner
+        miner_address = device.worker_associate_minder()
+        while device.worker_associate_minder() is not None:
+            print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.")
+            # worker uploads data to miner
+            device.worker_upload_to_miner(upload, miner_address)
+        else:
+            wait_new_miner_time = 10
+            print(f"No miner in peers yet. Re-requesting miner address in {wait_new_miner_time} secs")
+            time.sleep(wait_new_miner_time)
+            miner_address = device.worker_associate_minder()
+        
 
 
 # endpoint to return the node's copy of the chain.
@@ -588,40 +493,3 @@ def register_with_existing_node():
         # if something goes wrong, pass it on to the API response
         # return response.content, response.status_code, "why 404"
         return "weird"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	
-''' Questions
-	1. Who's in charge of assigning which devices are workers and which are the miners, if there is not a central server? Self assign?
-'''
-
-# useful docs
-''' 
-pytorch create a vector https://pytorch.org/docs/stable/torch.html 
-
-seems int operations are faster than float, so use column vector that are full of ints http://nicolas.limare.net/pro/notes/2014/12/12_arit_speed/
-
-create torch tensor from np array https://pytorch.org/docs/stable/tensors.html
-
-use pytorch autograd to calculate gradients
-https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html#sphx-glr-beginner-blitz-autograd-tutorial-py
-'''
-
