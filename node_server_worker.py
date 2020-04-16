@@ -8,12 +8,14 @@ import binascii
 import json
 from hashlib import sha256
 
+DEBUG_MODE = True # press any key to continue
+
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
-    def __init__(self, idx, transactions=None, timestamp=None, previous_hash=None, nonce=0):
+    def __init__(self, idx, transactions=[], generation_time=None, previous_hash=None, nonce=0):
         self._idx = idx
         self._transactions = transactions
-        self._timestamp = timestamp
+        self._generation_time = generation_time
         self._previous_hash = previous_hash
         self._nonce = nonce
         # the hash of the current block, calculated by compute_hash
@@ -267,7 +269,16 @@ class Worker:
 			return {"device_id": self._idx, "local_weight_update": local_weight, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
 
 	# TODO
-	# def worker_global_update(self):
+	def worker_global_update(self):
+		transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
+		Ni = SAMPLE_SIZE
+		Ns = len(transactions_in_downloaded_block)*Ni
+		global_weight_tensor_accumulator = torch.zeros_like(self._global_weight_vector)
+		for update in transactions_in_downloaded_block:
+			updated_weigts = update["updated_weigts"]
+			tensor_accumulator += (Ni/Ns)*(updated_weigts - self._global_weight_vector)
+		self._global_weight_vector += global_weight_tensor_accumulator
+		print("Global Update Done.")
 
 	''' Common Methods '''
 
@@ -391,6 +402,8 @@ def runApp():
         print(f"{PROMPT} This is workder with ID {device.get_idx()}")
         print(f"Starting epoch {device.get_current_epoch()}...")
         # while registering, chain was synced, if any
+		if DEBUG_MODE:
+            cont = input("Next worker_local_update. Continue?")
         print(f"{PROMPT} Worker is performing Step1 - local update...")
         upload = device.worker_local_update()
         # used for debugging
@@ -399,6 +412,8 @@ def runApp():
         print(f"global_gradients_per_data_point: {upload["global_gradients_per_data_point"]}")
         print(f"computation_time: {upload["computation_time"]}")
         # worker associating with miner
+		if DEBUG_MODE:
+            cont = input("Next worker_associate_minder. Continue?")
         miner_address = device.worker_associate_minder()
         while device.worker_associate_minder() is not None:
             print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.")
@@ -409,8 +424,20 @@ def runApp():
             print(f"No miner in peers yet. Re-requesting miner address in {wait_new_miner_time} secs")
             time.sleep(wait_new_miner_time)
             miner_address = device.worker_associate_minder()
+		# TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
+		if DEBUG_MODE:
+            cont = input("Next sleep 180. Continue?")
+		time.sleep(180)
         
-
+@app.route('/download_block_from_miner', methods=['POST'])
+def download_block_from_miner():
+    downloaded_block = request.get_json()["block_to_download"]
+	pow_proof = request.get_json()["pow_proof"]
+	# TODO may need to construct block from dump!
+	device.add_block(downloaded_block, pow_proof)
+	# TODO proper way to trigger global update??
+	device.worker_global_update()
+    return "Success", 201
 
 # endpoint to return the node's copy of the chain.
 # Our application will be using this endpoint to query the contents in the chain to display
@@ -431,7 +458,7 @@ def sync_chain_from_dump(chain_dump):
         #     continue  # skip genesis block
         block = Block(block_data["_idx"],
                       block_data["_transactions"],
-                      block_data["_timestamp"],
+                      block_data["_generation_time"],
                       block_data["_previous_hash"],
                       block_data["_nonce"])
         pow_proof = block_data['_block_hash']

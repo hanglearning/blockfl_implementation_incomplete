@@ -7,6 +7,8 @@ import binascii
 
 import json
 from hashlib import sha256
+DEBUG_MODE = True # press any key to continue
+
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
@@ -53,7 +55,7 @@ class Block:
         # after verified in cross_verification()
         self._transactions.append(transaction)
 
-    def block_set_generation_time(self):
+    def set_generation_time(self):
         self._generation_time = time.time()
 
 class Blockchain:
@@ -155,12 +157,24 @@ class Miner:
 
     def add_received_updates_from_miners(self, one_miner_updates):
         self._received_updates_from_miners.append(one_miner_updates)
+
+    def request_associated_workers_download(self, pow_proof):
+        block_to_download = self._blockchain.get_last_block()
+        data = {"block_to_download": block_to_download, "pow_proof": pow_proof}
+        headers = {'Content-Type': "application/json"}
+        for worker in self._associated_workers:
+            response = requests.post(f'{worker}/download_block_from_miner', data=json.dumps(data), headers=headers)
+            if response.status_code == 200:
+                print(f'Requested Worker {worker} to download the block.')
+            
     
     # TODO rewards
     # TODO need a timer
     def cross_verification(self):
-        # Block starting at 0
+        # Block index starting at 0
         candidate_block = Block(idx=self._blockchain.get_chain_length())
+        # diff miners most likely have diff generation time but we add the one that's mined
+        candidate_block.set_generation_time()        
         # it makes sense to first verify the updates itself received
         # verification machenism not specified in paper, so here we only verify the data_dim
         if self._received_transactions:
@@ -193,9 +207,6 @@ class Miner:
 			return current_hash, candidate_block
 		else:
 			print('Worker does not perform PoW.')
-	
-	# TODO cross-verification, method to verify updates, and make use of check_pow_proof
-	# def cross-verification()
 
 	def miner_receive_worker_updates(self, transaction):
 		if self._is_miner:
@@ -240,11 +251,10 @@ class Miner:
 		if self._is_miner:
 			if block_to_mine.get_transactions():
                 # TODO
-                # # get the last block and construct the candidate block
-				# last_block = self._blockchain.get_last_block()
+                # get the last block and add previous hash
+				last_block = self._blockchain.get_last_block()
 
-                # block_to_mine.set_previous_hash(last_block.get_block_hash())
-                # block_to_mine.block_set_generation_time()
+                block_to_mine.set_previous_hash(last_block.get_block_hash())
                 # TODO
 				# mine the candidate block by PoW, inside which the _block_hash is also set
 				pow_proof, mined_block = self.proof_of_work(block_to_mine)
@@ -258,7 +268,7 @@ class Miner:
 	''' Common Methods '''
 
 	# including adding the genesis block
-	def add_block_when_sync(self, block_to_add, pow_proof):
+	def add_block(self, block_to_add, pow_proof):
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
@@ -280,12 +290,6 @@ class Miner:
                 return False
             self.blockchain.chain.append(block_to_add)
             return True
-
-    # including adding the genesis block
-    def add_block_to_chain(self, block_to_add, pow_proof):
-        # 1. check current PoW
-        if self.blockchain.get_last_block() is not None:
-            last_block_hash = self.get_last_block.get_block_hash()
 	
 	@staticmethod
 	def check_pow_proof(block_to_check, pow_proof):
@@ -409,17 +413,15 @@ def receive_updates_from_miner():
     
 @app.route('/receive_propogated_block', methods=['POST'])
 def receive_propogated_block():
+    # TODO ABORT THE RUNNING POW!!!
     miner_id = request.get_json()["miner_id"]
     pow_proof = request.get_json()["pow_proof"]
     propogated_block = request.get_json()["propogated_block"]
     # TODO may have to construct the block from dump here!!!
-    # check pow proof
+    # # check pow proof
     # if pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == propogated_block.compute_hash(): DONE IN add_block
-
-
-    # ABORT THE RUNNING POW!!!
     # add this block to the chain
-    device.add_block_to_chain(propogated_block, pow_proof)
+    device.add_block(propogated_block, pow_proof)
 
 
 # start the app
@@ -430,25 +432,50 @@ def runApp():
 	while True:
 		print(f"Starting epoch {device.get_current_epoch()}...")
         print(f"{PROMPT} This is Miner with ID {device.get_idx()}")
+        if DEBUG_MODE:
+            cont = input("Next get all workers in this epoch. Continue?")
         # get all workers in this epoch, used in miner_receive_worker_updates()
         device.get_all_current_epoch_workers()
+        if DEBUG_MODE:
+            cont = input("Next clear all received updates from the last epoch if any. Continue?")
         # clear all received updates from the last epoch if any
         device.clear_received_updates_for_new_epoch()
         device.clear_received_updates_from_other_miners()
+        if DEBUG_MODE:
+            cont = input("Next miner_set_wait_time(). Continue?")
         # waiting for worker's updates. While miner_set_wait_time() is working, miner_receive_worker_updates will check block size by checking and when #(tx) = #(workers), abort the timer 
         device.miner_set_wait_time()
         # miner broadcast received local updates
+        if DEBUG_MODE:
+            cont = input("Next miner_broadcast_updates(). Continue?")
         device.miner_broadcast_updates()
         # TODO find a better approach to implement, maybe use thread - wait for 180s to receive updates from other miners. Also need to consider about the block size!!
+        if DEBUG_MODE:
+            cont = input("Next time.sleep(180). Continue?")
         time.sleep(180)
         # start cross-verification
         # TODO verify uploads? How?
+        if DEBUG_MODE:
+            cont = input("Next cross_verification. Continue?")
         candidate_block = device.cross_verification()
         # miner mine transactions by PoW on this candidate_block
+        if DEBUG_MODE:
+            cont = input("Next miner_mine_block. Continue?")
         pow_proof, mined_block = device.miner_mine_block(candidate_block)
         # block_propagation
+        # TODO if miner_mine_block returns none, which means it gets aborted, then it does not run propogate_the_block and add its own block. If not, run the next two.
+        if DEBUG_MODE:
+            cont = input("Next miner_propogate_the_block. Continue?")
         device.miner_propogate_the_block(mined_block, pow_proof)
-
+        # add its own block
+        # TODO fork ACK?
+        if DEBUG_MODE:
+            cont = input("Next add_block. Continue?")
+        device.add_block(candidate_block)
+        # send updates to its associated miners
+        if DEBUG_MODE:
+            cont = input("Next request_associated_workers_download. Continue?")
+        device.request_associated_workers_download(pow_proof)
 
 
 # endpoint to return the node's copy of the chain.
@@ -474,7 +501,7 @@ def sync_chain_from_dump(chain_dump):
                       block_data["_previous_hash"],
                       block_data["_nonce"])
         pow_proof = block_data['_block_hash']
-        added = device.add_block_when_sync(block, pow_proof)
+        added = device.add_block(block, pow_proof)
         if not added:
             raise Exception("The chain dump is tampered!!")
 			# break
