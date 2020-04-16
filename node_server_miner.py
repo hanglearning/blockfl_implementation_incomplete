@@ -1,3 +1,5 @@
+from flask import Flask, request
+import requests
 import sys
 import random
 import time
@@ -25,27 +27,27 @@ class Block:
     def compute_hash(self):
         block_content = json.dumps(self.__dict__, sort_keys=True)
         return sha256(block_content.encode()).hexdigest()
-	
-	def set_hash(self):
-		# compute_hash() also used to return value for verification
-		self._block_hash = self.compute_hash()
 
-	def nonce_increment(self):
-		self._nonce += 1
+    def set_hash(self):
+        # compute_hash() also used to return value for verification
+        self._block_hash = self.compute_hash()
 
-	# getters of the private attribute
-	def get_block_hash(self):
-		return self._block_hash
-	
-	def get_previous_hash(self):
-		return self._previous_hash
+    def nonce_increment(self):
+        self._nonce += 1
 
-	def get_block_idx(self):
-		return self._idx
+    # getters of the private attribute
+    def get_block_hash(self):
+        return self._block_hash
+    
+    def get_previous_hash(self):
+        return self._previous_hash
 
-	def get_transactions(self):
-		# get the updates from this block
-		return self._transactions
+    def get_block_idx(self):
+        return self._idx
+
+    def get_transactions(self):
+        # get the updates from this block
+        return self._transactions
     
     # setters
     def set_previous_hash(self, hash_to_set):
@@ -65,7 +67,7 @@ class Blockchain:
 
     def __init__(self):
         # it is fine to use a python list to store the chain for now
-		# technically this should be _chain as well
+        # technically this should be _chain as well
         self.chain = []
 
     def get_chain_length(self):
@@ -79,13 +81,13 @@ class Blockchain:
             return None
 
 class Miner:
-	def __init__(self, idx):
-		self._idx = idx
-		self._is_miner = True
-		# miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth, and also miner can use this info to obtain the epoch number to check if the uploaded updates from the worker are meant to be put into the same epoch
-		self._blockchain = Blockchain()
-		''' attributes for miners '''
-		self._received_transactions = []
+    def __init__(self, idx):
+        self._idx = idx
+        self._is_miner = True
+        # miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth, and also miner can use this info to obtain the epoch number to check if the uploaded updates from the worker are meant to be put into the same epoch
+        self._blockchain = Blockchain()
+        ''' attributes for miners '''
+        self._received_transactions = []
         # used to broadcast block for workers to do global updates
         self._associated_workers = set()
         # used to check if block size is full
@@ -95,27 +97,27 @@ class Miner:
         self._received_updates_from_miners = []
 
     ''' getters '''
-	# get device id
-	def get_idx(self):
-		return self._idx
+    # get device id
+    def get_idx(self):
+        return self._idx
 
-	# get device's copy of blockchain
-	def get_blockchain(self):
-		return self._blockchain
+    # get device's copy of blockchain
+    def get_blockchain(self):
+        return self._blockchain
 
     def get_current_epoch(self):
         return self._blockchain.get_chain_length()+1
 
 
     ''' setters '''
-	# set the consensused blockchain
-	def set_blockchain(self, blockchain):
-		self._blockchain = blockchain
+    # set the consensused blockchain
+    def set_blockchain(self, blockchain):
+        self._blockchain = blockchain
 
-	def is_miner(self):
-		return self.is_miner
+    def is_miner(self):
+        return self.is_miner
 
-	''' Functions for Miners '''
+    ''' Functions for Miners '''
 
     def associated_worker(self, worker_address):
         self._associated_workers.add(worker_address)
@@ -126,15 +128,15 @@ class Miner:
     def get_all_current_epoch_workers(self):
         self._current_epoch_worker_nodes.clear()
         for node in peers:
-        response = requests.get(f'{node}/get_role')
-        if response.status_code == 200:
-            if response.text == 'Worker':
-                response2 = requests.get(f'{node}/get_worker_epoch')
-                if response2.status_code == 200:
-                    if int(response2.text) == self.get_current_epoch():
-                        self._current_epoch_worker_nodes.add(node)
-        else:
-            return response.status_code
+            response = requests.get(f'{node}/get_role')
+            if response.status_code == 200:
+                if response.text == 'Worker':
+                    response2 = requests.get(f'{node}/get_worker_epoch')
+                    if response2.status_code == 200:
+                        if int(response2.text) == self.get_current_epoch():
+                            self._current_epoch_worker_nodes.add(node)
+            else:
+                return response.status_code
         
     def get_all_current_epoch_miners(self):
         self._current_epoch_miner_nodes.clear()
@@ -185,7 +187,7 @@ class Miner:
                     pass
         # cross-verification
         if self._received_updates_from_miners:
-             for update in self._received_updates_from_miners:
+            for update in self._received_updates_from_miners:
                 if len(update['received_updates']['local_weight_update']) == DATA_DIM:
                     candidate_block.add_verified_transaction(update)
                 else:
@@ -193,39 +195,39 @@ class Miner:
         # when timer ends
         return candidate_block
 
-	# TODO or rewards here?
-	def proof_of_work(self, candidate_block):
-		''' Brute Force the nonce. May change to PoS by Dr. Jihong Park '''
-		if self._is_miner:
-			current_hash = candidate_block.compute_hash()
-			while not current_hash.startswith('0' * Blockchain.difficulty):
-				candidate_block.nonce_increment()
-				current_hash = candidate_block.compute_hash()
-			# return the qualified hash as a PoW proof, to be verified by other devices before adding the block
-			# also set its hash as well. _block_hash is the same as pow proof
-			candidate_block.set_hash()
-			return current_hash, candidate_block
-		else:
-			print('Worker does not perform PoW.')
+    # TODO or rewards here?
+    def proof_of_work(self, candidate_block):
+        ''' Brute Force the nonce. May change to PoS by Dr. Jihong Park '''
+        if self._is_miner:
+            current_hash = candidate_block.compute_hash()
+            while not current_hash.startswith('0' * Blockchain.difficulty):
+                candidate_block.nonce_increment()
+                current_hash = candidate_block.compute_hash()
+            # return the qualified hash as a PoW proof, to be verified by other devices before adding the block
+            # also set its hash as well. _block_hash is the same as pow proof
+            candidate_block.set_hash()
+            return current_hash, candidate_block
+        else:
+            print('Worker does not perform PoW.')
 
-	def miner_receive_worker_updates(self, transaction):
-		if self._is_miner:
-			self._received_transactions.append(transaction)
+    def miner_receive_worker_updates(self, transaction):
+        if self._is_miner:
+            self._received_transactions.append(transaction)
             print(f"Miner {self.get_idx} received updates from {transaction['device_id']}")
             # check block size
             if len(self._current_epoch_worker_nodes) == len(self._received_transactions):
                 # TODO abort the timer in miner_set_wait_time()
                 # https://stackoverflow.com/questions/5114292/break-interrupt-a-time-sleep-in-python
                 pass
-		else:
-			print("Worker cannot receive other workers' updates.")
+        else:
+            print("Worker cannot receive other workers' updates.")
 
     def miner_broadcast_updates(self):
         # get all miners in this epoch
         self.get_all_current_epoch_miners()
 
         data = {"miner_id": self._idx, "received_updates": self._received_transactions}
-            headers = {'Content-Type': "application/json"}
+        headers = {'Content-Type': "application/json"}
 
         # broadcast the updates
         for miner in self._current_epoch_miner_nodes:
@@ -238,7 +240,7 @@ class Miner:
         device.get_all_current_epoch_miners()
 
         data = {"miner_id": self._idx, "propogated_block": block_to_propogate, "pow_proof": pow_proof}
-            headers = {'Content-Type': "application/json"}
+        headers = {'Content-Type': "application/json"}
 
         for miner in self._current_epoch_miner_nodes:
             # Make a request to register with remote node and obtain information
@@ -247,28 +249,28 @@ class Miner:
                 print(f'Miner {self._idx} sent the propogated block to miner {miner}')
 
     # TODO THIS FUNCTION MUST ABORT IF RECEIVED A BLOCK FROM ANOTHER MINER!!!
-	def miner_mine_block(self, block_to_mine):
-		if self._is_miner:
-			if block_to_mine.get_transactions():
+    def miner_mine_block(self, block_to_mine):
+        if self._is_miner:
+            if block_to_mine.get_transactions():
                 # TODO
                 # get the last block and add previous hash
-				last_block = self._blockchain.get_last_block()
+                last_block = self._blockchain.get_last_block()
 
                 block_to_mine.set_previous_hash(last_block.get_block_hash())
                 # TODO
-				# mine the candidate block by PoW, inside which the _block_hash is also set
-				pow_proof, mined_block = self.proof_of_work(block_to_mine)
-				# propagate the block in main()
+                # mine the candidate block by PoW, inside which the _block_hash is also set
+                pow_proof, mined_block = self.proof_of_work(block_to_mine)
+                # propagate the block in main()
                 return pow_proof, mined_block
-			else:
-				print("No transaction to mine.")
-		else:
-			print("Worker does not mine transactions.")
+            else:
+                print("No transaction to mine.")
+        else:
+            print("Worker does not mine transactions.")
 
-	''' Common Methods '''
+    ''' Common Methods '''
 
-	# including adding the genesis block
-	def add_block(self, block_to_add, pow_proof):
+    # including adding the genesis block
+    def add_block(self, block_to_add, pow_proof):
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
@@ -290,47 +292,47 @@ class Miner:
                 return False
             self.blockchain.chain.append(block_to_add)
             return True
-	
-	@staticmethod
-	def check_pow_proof(block_to_check, pow_proof):
-		# if not (block_to_add._block_hash.startswith('0' * Blockchain.difficulty) and block_to_add._block_hash == pow_proof): WRONG
-		# shouldn't check the block_hash directly as it's not trustworthy and it's also private
-		return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check.compute_hash()
+    
+    @staticmethod
+    def check_pow_proof(block_to_check, pow_proof):
+        # if not (block_to_add._block_hash.startswith('0' * Blockchain.difficulty) and block_to_add._block_hash == pow_proof): WRONG
+        # shouldn't check the block_hash directly as it's not trustworthy and it's also private
+        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check.compute_hash()
 
-	''' consensus algorithm for the longest chain '''
-	
-	@classmethod
-	def check_chain_validity(cls, chain_to_check):
-		for block in chain_to_check[1:]:
-			if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].get_block_hash():
-				pass
-			else:
-				return False
-		return True
+    ''' consensus algorithm for the longest chain '''
+    
+    @classmethod
+    def check_chain_validity(cls, chain_to_check):
+        for block in chain_to_check[1:]:
+            if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].get_block_hash():
+                pass
+            else:
+                return False
+        return True
 
-	# TODO
-	def consensus(self):
-		"""
-		Simple consensus algorithm - if a longer valid chain is found, the current device's chain is replaced with it.
-		"""
+    # TODO
+    def consensus(self):
+        """
+        Simple consensus algorithm - if a longer valid chain is found, the current device's chain is replaced with it.
+        """
 
-		longest_chain = None
-		chain_len = len(self.blockchain.chain)
+        longest_chain = None
+        chain_len = len(self.blockchain.chain)
 
-		for node in peers:
-			response = requests.get(f'{node}/chain')
-			length = response.json()['length']
-			chain = response.json()['chain']
-			if length > chain_len and blockchain.check_chain_validity(chain):
-				# Longer valid chain found!
-				chain_len = length
-				longest_chain = chain
+        for node in peers:
+            response = requests.get(f'{node}/chain')
+            length = response.json()['length']
+            chain = response.json()['chain']
+            if length > chain_len and blockchain.check_chain_validity(chain):
+                # Longer valid chain found!
+                chain_len = length
+                longest_chain = chain
 
-		if longest_chain:
-			self.blockchain.chain = longest_chain
-			return True
+        if longest_chain:
+            self.blockchain.chain = longest_chain
+            return True
 
-		return False
+        return False
 
 ''' App Starts Here '''
 
@@ -355,37 +357,37 @@ peers = set()
 device = Miner(binascii.b2a_hex(os.urandom(4)).decode('utf-8'))
 
 def miner_set_wait_time():
-	if device.is_miner:
-		global miner_accept_updates
-		miner_accept_updates = True
-		print(f"{PROMPT} Miner wait time set to {MINER_WAITING_UPLOADS_PERIOD}s, waiting for updates...")
-		time.sleep(MINER_WAITING_UPLOADS_PERIOD)
-		miner_accept_updates = False
+    if device.is_miner:
+        global miner_accept_updates
+        miner_accept_updates = True
+        print(f"{PROMPT} Miner wait time set to {MINER_WAITING_UPLOADS_PERIOD}s, waiting for updates...")
+        time.sleep(MINER_WAITING_UPLOADS_PERIOD)
+        miner_accept_updates = False
         print(f"{PROMPT} Miner done accepting updates in this epoch.")
-	else:
-		# TODO make return more reasonable
-		return "error"
+    else:
+        # TODO make return more reasonable
+        return "error"
 
 @app.route('/get_role', methods=['GET'])
 def return_role():
-	return "Miner"
+    return "Miner"
 
 
 # used while worker uploading the updates. 
 # If epoch doesn't match, one of the entity has to resync the chain
 @app.route('/get_miner_epoch', methods=['GET'])
 def get_miner_epoch():
-	if device.is_miner:
-		return str(device.get_current_epoch())
-	else:
-		# TODO make return more reasonable
-		return "error"
+    if device.is_miner:
+        return str(device.get_current_epoch())
+    else:
+        # TODO make return more reasonable
+        return "error"
 
 
 # end point for worker to check whether the miner is now accepting the dates(within miner's wait time)
 @app.route('/within_miner_wait_time', methods=['GET'])
 def within_miner_wait_time():
-	return "True" if miner_accept_updates else "False"
+    return "True" if miner_accept_updates else "False"
 
 # endpoint to for worker to upload updates to the associated miner
 @app.route('/new_transaction', methods=['POST'])
@@ -426,11 +428,11 @@ def receive_propogated_block():
 
 # start the app
 # assign tasks based on role
-# @app.route('/')
+@app.route('/')
 def runApp():
     # wait for worker maximum wating time
-	while True:
-		print(f"Starting epoch {device.get_current_epoch()}...")
+    while True:
+        print(f"Starting epoch {device.get_current_epoch()}...")
         print(f"{PROMPT} This is Miner with ID {device.get_idx()}")
         if DEBUG_MODE:
             cont = input("Next get all workers in this epoch. Continue?")
@@ -504,7 +506,7 @@ def sync_chain_from_dump(chain_dump):
         added = device.add_block(block, pow_proof)
         if not added:
             raise Exception("The chain dump is tampered!!")
-			# break
+            # break
     # return generated_blockchain
 
 
@@ -523,8 +525,7 @@ def register_new_peers():
     peers.add(node_address)
 
     # Return the consensus blockchain to the newly registered node so that the new node can sync
-    chain_meta = query_blockchain()
-	return {"chain_meta": chain_meta, "global_weight_vector": device.get_global_weight_vector}
+    return {"chain_meta": query_blockchain()}
 
 
 @app.route('/register_with', methods=['POST'])
@@ -535,7 +536,7 @@ def register_with_existing_node():
     """
     register_with_node_address = request.get_json()["register_with_node_address"]
     if not register_with_node_address:
-        return "Invalid data", 400
+        return "Invalid request - must specify a register_with_node_address!", 400
 
     data = {"registerer_node_address": request.host_url}
     headers = {'Content-Type': "application/json"}
@@ -549,10 +550,13 @@ def register_with_existing_node():
         # sync the chain
         chain_data_dump = json.loads(response.json()['chain_meta'])['chain']
         sync_chain_from_dump(chain_data_dump)
-		# sync the global weight from this register_with_node
-		# TODO that might be just a string!!!
-		global_weight_to_sync = response.json()['global_weight_vector']
-		# update peer list according to the register-with node
+        
+        # NO NO NO sync the global weight from this register_with_node
+        # TODO that might be just a string!!!
+        # global_weight_to_sync = response.json()['global_weight_vector']
+        # change to let node calculate global_weight_vector block by block
+
+        # update peer list according to the register-with node
         peers.update(json.loads(response.json()['chain_meta'])['peers'])
         return "Registration successful", 200
     else:
@@ -560,7 +564,5 @@ def register_with_existing_node():
         # return response.content, response.status_code, "why 404"
         return "weird"
 
-# START FROM 4/15/20
-# Fix block generation time
-# original add_block should be used in any conditiono
+# TODO
 # block add time can use another list to store if necessary
