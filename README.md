@@ -9,4 +9,8 @@ curl -X POST \
   -H 'Content-Type: application/json' \
   -d '{"register_with_node_address": "http://127.0.0.1:5000"}'
 ```
-
+### Get chain
+```
+curl -X GET http://localhost:5000/chain
+curl -X GET http://localhost:5001/chain
+```
