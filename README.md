@@ -14,3 +14,9 @@ curl -X POST \
 curl -X GET http://localhost:5000/chain
 curl -X GET http://localhost:5001/chain
 ```
+
+### Kill port
+```
+sudo lsof -i tcp:500
+kill -9 <PID>  
+```

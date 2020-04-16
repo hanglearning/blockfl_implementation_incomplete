@@ -144,6 +144,8 @@ class Worker:
         if not self._data:
             for _ in range(self._sample_size):
                 self._data.append({'x': torch.randint(0, high=20, size=(self._data_dim, 1)), 'y': torch.randint(0, high=20, size=(1, 1))})
+            if DEBUG_MODE:
+                print(self._data)
         else:
             print("The data of this worker has already been initialized. Changing data is not currently implemented in this version.")
 
@@ -186,7 +188,7 @@ class Worker:
             print("Worker does not accept other workers' updates directly")
         else:
             checked = False
-            # check if node is still a miner
+            # check if this node is still a miner
             response = requests.get(f'{miner_address}/get_role')
             if response.status_code == 200:
                 if response.text == 'Miner':
@@ -355,8 +357,8 @@ class Worker:
 app = Flask(__name__)
 
 # pre-defined and agreed fields
-DATA_DIM = 10
-SAMPLE_SIZE = 20
+DATA_DIM = 4
+SAMPLE_SIZE = 3
 STEP_SIZE = 3
 EPSILON = 0.02
 
@@ -410,23 +412,27 @@ def runApp():
         print(f"{PROMPT} Worker is performing Step1 - local update...")
         upload = device.worker_local_update()
         # used for debugging
-        print("Local updates done.")
-        print(f"local_weight_update: {upload['local_weight_update']}")
-        print(f"global_gradients_per_data_point: {upload['global_gradients_per_data_point']}")
-        print(f"computation_time: {upload['computation_time']}")
+        if DEBUG_MODE:
+            print("Local updates done.")
+            print(f"local_weight_update: {upload['local_weight_update']}")
+            print(f"global_gradients_per_data_point: {upload['global_gradients_per_data_point']}")
+            print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
             cont = input("Next worker_associate_minder. Continue?")
         miner_address = device.worker_associate_minder()
-        while device.worker_associate_minder() is not None:
+        if DEBUG_MODE:
+            print("miner_address", miner_address)
+        # while miner_address is not None:
+        if miner_address is not None:
             print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.")
             # worker uploads data to miner
             device.worker_upload_to_miner(upload, miner_address)
-        else:
-            wait_new_miner_time = 10
-            print(f"No miner in peers yet. Re-requesting miner address in {wait_new_miner_time} secs")
-            time.sleep(wait_new_miner_time)
-            miner_address = device.worker_associate_minder()
+        # else: dealt with after combining two classes
+        #     wait_new_miner_time = 10
+        #     print(f"No miner in peers yet. Re-requesting miner address in {wait_new_miner_time} secs")
+        #     time.sleep(wait_new_miner_time)
+        #     miner_address = device.worker_associate_minder()
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
         if DEBUG_MODE:
             cont = input("Next sleep 180. Continue?")
@@ -473,6 +479,7 @@ def sync_chain_from_dump(chain_dump):
 
 
 
+
 ''' add node to the network '''
 
 # endpoint to add new peers to the network.
@@ -485,7 +492,8 @@ def register_new_peers():
 
     # Add the node to the peer list
     peers.add(node_address)
-
+    if DEBUG_MODE:
+            print("register_new_peers() called, peers", repr(peers))
     # Return the consensus blockchain to the newly registered node so that the new node can sync
     return {"chain_meta": query_blockchain()}
 
@@ -509,6 +517,8 @@ def register_with_existing_node():
     if response.status_code == 200:
         # global blockchain
         global peers
+        # add the register_with_node_address as a peer
+        peers.add(register_with_node_address)
         # sync the chain
         chain_data_dump = json.loads(response.json()['chain_meta'])['chain']
         sync_chain_from_dump(chain_data_dump)
@@ -520,8 +530,21 @@ def register_with_existing_node():
 
         # update peer list according to the register-with node
         peers.update(json.loads(response.json()['chain_meta'])['peers'])
+        # remove itself if there is
+        peers.remove(request.host_url)
+        if DEBUG_MODE:
+            print("register_with_existing_node() called, peers", repr(peers))
         return "Registration successful", 200
     else:
         # if something goes wrong, pass it on to the API response
         # return response.content, response.status_code, "why 404"
         return "weird"
+
+
+
+''' debug methods '''
+# debug peer var
+@app.route('/debug_peers', methods=['GET'])
+def debug_peers():
+    return repr(peers)
+    

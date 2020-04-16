@@ -22,7 +22,7 @@ class Block:
         self._nonce = nonce
         # the hash of the current block, calculated by compute_hash
         self._block_hash = None
-    
+        
     # remove time_stamp
     def compute_hash(self):
         block_content = json.dumps(self.__dict__, sort_keys=True)
@@ -95,6 +95,8 @@ class Miner:
         # used in miner_broadcast_updates and block propogation
         self._current_epoch_miner_nodes = set()
         self._received_updates_from_miners = []
+        # used in cross_verification and in the future PoS
+        self._rewards = 0
 
     ''' getters '''
     # get device id
@@ -119,6 +121,9 @@ class Miner:
 
     ''' Functions for Miners '''
 
+    def get_rewards(self, rewards):
+        self._rewards += rewards
+
     def associated_worker(self, worker_address):
         self._associated_workers.add(worker_address)
 
@@ -126,6 +131,7 @@ class Miner:
         self._associated_workers.clear()
 
     def get_all_current_epoch_workers(self):
+        print("get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
         self._current_epoch_worker_nodes.clear()
         for node in peers:
             response = requests.get(f'{node}/get_role')
@@ -137,6 +143,8 @@ class Miner:
                             self._current_epoch_worker_nodes.add(node)
             else:
                 return response.status_code
+        if DEBUG_MODE:
+            print("After get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
         
     def get_all_current_epoch_miners(self):
         self._current_epoch_miner_nodes.clear()
@@ -150,12 +158,18 @@ class Miner:
                             self._current_epoch_miner_nodes.append(node)
             else:
                 return response.status_code
+        if DEBUG_MODE:
+            print("get_all_current_epoch_miners() called", self._current_epoch_miner_nodes)
 
     def clear_received_updates_for_new_epoch(self):
         self._received_transactions.clear()
+        if DEBUG_MODE:
+            print("clear_received_updates_for_new_epoch() called", self._received_transactions)
 
     def clear_received_updates_from_other_miners(self):
         self._received_updates_from_miners.clear()
+        if DEBUG_MODE:
+            print("clear_received_updates_from_other_miners() called", self._received_updates_from_miners)
 
     def add_received_updates_from_miners(self, one_miner_updates):
         self._received_updates_from_miners.append(one_miner_updates)
@@ -173,6 +187,8 @@ class Miner:
     # TODO rewards
     # TODO need a timer
     def cross_verification(self):
+        if DEBUG_MODE:
+            print("cross_verification() called")
         # Block index starting at 0
         candidate_block = Block(idx=self._blockchain.get_chain_length())
         # diff miners most likely have diff generation time but we add the one that's mined
@@ -185,6 +201,7 @@ class Miner:
                     candidate_block.add_verified_transaction(update)
                 else:
                     pass
+                self.get_rewards(1)
         # cross-verification
         if self._received_updates_from_miners:
             for update in self._received_updates_from_miners:
@@ -192,6 +209,12 @@ class Miner:
                     candidate_block.add_verified_transaction(update)
                 else:
                     pass
+                self.get_rewards(1)
+
+        if DEBUG_MODE:
+            print("Rewards after cross_verification", self._rewards)
+            print("candidate_block", candidate_block)
+
         # when timer ends
         return candidate_block
 
@@ -261,6 +284,9 @@ class Miner:
                 # mine the candidate block by PoW, inside which the _block_hash is also set
                 pow_proof, mined_block = self.proof_of_work(block_to_mine)
                 # propagate the block in main()
+
+                if DEBUG_MODE:
+                    print("miner_mine_block() called", pow_proof, mined_block)
                 return pow_proof, mined_block
             else:
                 print("No transaction to mine.")
@@ -340,8 +366,8 @@ app = Flask(__name__)
 
 # pre-defined and agreed fields
 # miner use these values to verify data validity
-DATA_DIM = 10
-SAMPLE_SIZE = 20
+DATA_DIM = 4
+SAMPLE_SIZE = 3
 # miner waits for 180s to fill its candidate block with updates from devices
 MINER_WAITING_UPLOADS_PERIOD = 180
 
@@ -402,7 +428,8 @@ def new_transaction():
 
         update_data["generation_time"] = time.time()
         device.miner_receive_worker_updates(update_data)
-
+        if DEBUG_MODE:
+            print("new_transaction() called from a worker", update_data)
     return "Success", 201
 
 @app.route('/receive_updates_from_miner', methods=['POST'])
@@ -491,6 +518,7 @@ def query_blockchain():
                        "chain": chain_data,
                        "peers": list(peers)})
 
+
 # TODO helper function used in register_with_existing_node() only while registering node
 def sync_chain_from_dump(chain_dump):
     # generated_blockchain.create_genesis_block()
@@ -523,7 +551,8 @@ def register_new_peers():
 
     # Add the node to the peer list
     peers.add(node_address)
-
+    if DEBUG_MODE:
+            print("register_new_peers() called, peers", repr(peers))
     # Return the consensus blockchain to the newly registered node so that the new node can sync
     return {"chain_meta": query_blockchain()}
 
@@ -547,6 +576,8 @@ def register_with_existing_node():
     if response.status_code == 200:
         # global blockchain
         global peers
+        # add the register_with_node_address as a peer
+        peers.add(register_with_node_address)
         # sync the chain
         chain_data_dump = json.loads(response.json()['chain_meta'])['chain']
         sync_chain_from_dump(chain_data_dump)
@@ -558,6 +589,10 @@ def register_with_existing_node():
 
         # update peer list according to the register-with node
         peers.update(json.loads(response.json()['chain_meta'])['peers'])
+        # remove itself if there is
+        peers.remove(request.host_url)
+        if DEBUG_MODE:
+            print("register_with_existing_node() called, peers", repr(peers))
         return "Registration successful", 200
     else:
         # if something goes wrong, pass it on to the API response
@@ -566,3 +601,10 @@ def register_with_existing_node():
 
 # TODO
 # block add time can use another list to store if necessary
+
+
+''' debug methods '''
+# debug peer var
+@app.route('/debug_peers', methods=['GET'])
+def debug_peers():
+    return repr(peers)
