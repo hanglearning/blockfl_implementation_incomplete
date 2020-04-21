@@ -1,3 +1,5 @@
+import pdb
+
 from flask import Flask, request
 import requests
 import sys
@@ -14,10 +16,10 @@ DEBUG_MODE = True # press any key to continue
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
-    def __init__(self, idx, transactions=[], generation_time=None, previous_hash=None, nonce=0):
+    def __init__(self, idx, transactions=[], block_generation_time=None, previous_hash=None, nonce=0):
         self._idx = idx
         self._transactions = transactions
-        self._generation_time = generation_time
+        self._block_generation_time = block_generation_time
         self._previous_hash = previous_hash
         self._nonce = nonce
         # the hash of the current block, calculated by compute_hash
@@ -57,8 +59,8 @@ class Block:
         # after verified in cross_verification()
         self._transactions.append(transaction)
 
-    def set_generation_time(self):
-        self._generation_time = time.time()
+    def set_block_generation_time(self):
+        self._block_generation_time = time.time()
 
 class Blockchain:
 
@@ -139,6 +141,7 @@ class Miner:
                 if response.text == 'Worker':
                     response2 = requests.get(f'{node}/get_worker_epoch')
                     if response2.status_code == 200:
+                        print("response2.text", response2.text)
                         if int(response2.text) == self.get_current_epoch():
                             self._current_epoch_worker_nodes.add(node)
             else:
@@ -192,12 +195,13 @@ class Miner:
         # Block index starting at 0
         candidate_block = Block(idx=self._blockchain.get_chain_length())
         # diff miners most likely have diff generation time but we add the one that's mined
-        candidate_block.set_generation_time()        
+        candidate_block.set_block_generation_time()        
         # it makes sense to first verify the updates itself received
         # verification machenism not specified in paper, so here we only verify the data_dim
+        # pdb.set_trace()
         if self._received_transactions:
             for update in self._received_transactions:
-                if len(update['local_weight_update']) == DATA_DIM:
+                if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
                     candidate_block.add_verified_transaction(update)
                 else:
                     pass
@@ -246,6 +250,7 @@ class Miner:
             print("Worker cannot receive other workers' updates.")
 
     def miner_broadcast_updates(self):
+        # pdb.set_trace()
         # get all miners in this epoch
         self.get_all_current_epoch_miners()
 
@@ -273,13 +278,17 @@ class Miner:
 
     # TODO THIS FUNCTION MUST ABORT IF RECEIVED A BLOCK FROM ANOTHER MINER!!!
     def miner_mine_block(self, block_to_mine):
+        # pdb.set_trace()
         if self._is_miner:
             if block_to_mine.get_transactions():
                 # TODO
                 # get the last block and add previous hash
                 last_block = self._blockchain.get_last_block()
-
-                block_to_mine.set_previous_hash(last_block.get_block_hash())
+                if last_block is None:
+                    # mine the genesis block
+                    block_to_mine.set_previous_hash(None)
+                else:
+                    block_to_mine.set_previous_hash(last_block.get_block_hash())
                 # TODO
                 # mine the candidate block by PoW, inside which the _block_hash is also set
                 pow_proof, mined_block = self.proof_of_work(block_to_mine)
@@ -300,9 +309,11 @@ class Miner:
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
-        if self.blockchain.get_last_block() is not None:
+        pdb.set_trace()
+        last_block = self._blockchain.get_last_block()
+        if last_block is not None:
             # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
-            last_block_hash = self.get_last_block.get_block_hash()
+            last_block_hash = last_block.get_block_hash()
             if block_to_add.get_previous_hash() != last_block_hash:
                 # to be used as condition check later
                 return False
@@ -314,6 +325,7 @@ class Miner:
             return True
         else:
             # add genesis block
+            # START FROM HERE 4/21/20
             if not check_pow_proof(block_to_add, pow_proof):
                 return False
             self.blockchain.chain.append(block_to_add)
@@ -369,11 +381,12 @@ app = Flask(__name__)
 DATA_DIM = 4
 SAMPLE_SIZE = 3
 # miner waits for 180s to fill its candidate block with updates from devices
-MINER_WAITING_UPLOADS_PERIOD = 180
+MINER_WAITING_UPLOADS_PERIOD = 10
 
 PROMPT = ">>>"
 
-miner_accept_updates = False
+# TODO change to False and uncomment miner wait time
+miner_accept_updates = True
 
 # the address to other participating members of the network
 peers = set()
@@ -383,7 +396,7 @@ peers = set()
 device = Miner(binascii.b2a_hex(os.urandom(4)).decode('utf-8'))
 
 def miner_set_wait_time():
-    if device.is_miner:
+    if device.is_miner():
         global miner_accept_updates
         miner_accept_updates = True
         print(f"{PROMPT} Miner wait time set to {MINER_WAITING_UPLOADS_PERIOD}s, waiting for updates...")
@@ -403,7 +416,7 @@ def return_role():
 # If epoch doesn't match, one of the entity has to resync the chain
 @app.route('/get_miner_epoch', methods=['GET'])
 def get_miner_epoch():
-    if device.is_miner:
+    if device.is_miner():
         return str(device.get_current_epoch())
     else:
         # TODO make return more reasonable
@@ -426,7 +439,7 @@ def new_transaction():
             if not update_data.get(field):
                 return "Invalid transaction(update) data", 404
 
-        update_data["generation_time"] = time.time()
+        update_data["tx_received_time"] = time.time()
         device.miner_receive_worker_updates(update_data)
         if DEBUG_MODE:
             print("new_transaction() called from a worker", update_data)
@@ -473,7 +486,7 @@ def runApp():
         if DEBUG_MODE:
             cont = input("Next miner_set_wait_time(). Continue?")
         # waiting for worker's updates. While miner_set_wait_time() is working, miner_receive_worker_updates will check block size by checking and when #(tx) = #(workers), abort the timer 
-        device.miner_set_wait_time()
+        # TODO uncomment in production miner_set_wait_time()
         # miner broadcast received local updates
         if DEBUG_MODE:
             cont = input("Next miner_broadcast_updates(). Continue?")
@@ -481,7 +494,7 @@ def runApp():
         # TODO find a better approach to implement, maybe use thread - wait for 180s to receive updates from other miners. Also need to consider about the block size!!
         if DEBUG_MODE:
             cont = input("Next time.sleep(180). Continue?")
-        time.sleep(180)
+        # time.sleep(180)
         # start cross-verification
         # TODO verify uploads? How?
         if DEBUG_MODE:
@@ -500,7 +513,7 @@ def runApp():
         # TODO fork ACK?
         if DEBUG_MODE:
             cont = input("Next add_block. Continue?")
-        device.add_block(candidate_block)
+        device.add_block(candidate_block, pow_proof)
         # send updates to its associated miners
         if DEBUG_MODE:
             cont = input("Next request_associated_workers_download. Continue?")
@@ -527,7 +540,7 @@ def sync_chain_from_dump(chain_dump):
         #     continue  # skip genesis block
         block = Block(block_data["_idx"],
                       block_data["_transactions"],
-                      block_data["_generation_time"],
+                      block_data["_block_generation_time"],
                       block_data["_previous_hash"],
                       block_data["_nonce"])
         pow_proof = block_data['_block_hash']
@@ -554,7 +567,7 @@ def register_new_peers():
     if DEBUG_MODE:
             print("register_new_peers() called, peers", repr(peers))
     # Return the consensus blockchain to the newly registered node so that the new node can sync
-    return {"chain_meta": query_blockchain()}
+    return query_blockchain()
 
 
 @app.route('/register_with', methods=['POST'])
@@ -566,8 +579,7 @@ def register_with_existing_node():
     register_with_node_address = request.get_json()["register_with_node_address"]
     if not register_with_node_address:
         return "Invalid request - must specify a register_with_node_address!", 400
-
-    data = {"registerer_node_address": request.host_url}
+    data = {"registerer_node_address": request.host_url[:-1]}
     headers = {'Content-Type': "application/json"}
 
     # Make a request to register with remote node and obtain information
@@ -579,7 +591,7 @@ def register_with_existing_node():
         # add the register_with_node_address as a peer
         peers.add(register_with_node_address)
         # sync the chain
-        chain_data_dump = json.loads(response.json()['chain_meta'])['chain']
+        chain_data_dump = response.json()['chain']
         sync_chain_from_dump(chain_data_dump)
         
         # NO NO NO sync the global weight from this register_with_node
@@ -588,9 +600,9 @@ def register_with_existing_node():
         # change to let node calculate global_weight_vector block by block
 
         # update peer list according to the register-with node
-        peers.update(json.loads(response.json()['chain_meta'])['peers'])
+        peers.update(response.json()['peers'])
         # remove itself if there is
-        peers.remove(request.host_url)
+        peers.remove(request.host_url[:-1])
         if DEBUG_MODE:
             print("register_with_existing_node() called, peers", repr(peers))
         return "Registration successful", 200

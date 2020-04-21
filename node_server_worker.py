@@ -1,3 +1,5 @@
+import pdb
+
 from flask import Flask, request
 import requests
 import sys
@@ -14,10 +16,10 @@ DEBUG_MODE = True # press any key to continue
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
-    def __init__(self, idx, transactions=[], generation_time=None, previous_hash=None, nonce=0):
+    def __init__(self, idx, transactions=[], block_generation_time=None, previous_hash=None, nonce=0):
         self._idx = idx
         self._transactions = transactions
-        self._generation_time = generation_time
+        self._block_generation_time = block_generation_time
         self._previous_hash = previous_hash
         self._nonce = nonce
         # the hash of the current block, calculated by compute_hash
@@ -115,7 +117,7 @@ class Worker:
         self._blockchain = blockchain
 
     def is_miner(self):
-        return self.is_miner
+        return self._is_miner
 
     ''' Functions for Workers '''
 
@@ -141,9 +143,13 @@ class Worker:
         #     print("Warning - 
         # Device is initialized as miner.")
         # else:
+
+        # if using torch.randit to generate x and y, calculating gradient will give Long tensor error, so https://discuss.pytorch.org/t/generating-random-tensors-according-to-the-uniform-distribution-pytorch/53030
+        # define range
+        r1, r2 = 0, 20
         if not self._data:
             for _ in range(self._sample_size):
-                self._data.append({'x': torch.randint(0, high=20, size=(self._data_dim, 1)), 'y': torch.randint(0, high=20, size=(1, 1))})
+                self._data.append({'x': (r1 - r2) * torch.rand(self._data_dim, 1) + r2, 'y': (r1 - r2) * torch.rand(1, 1) + r2})
             if DEBUG_MODE:
                 print(self._data)
         else:
@@ -154,7 +160,7 @@ class Worker:
         if self._is_miner:
             print("Miner does not set weight values")
         else:
-            if not self._global_weight_vector:
+            if self._global_weight_vector is None:
                 # if not updating, initialize with all 0s, as directed by Dr. Park
                 # Or, we should hard code a vector with some small values for the device class as it has to be the same for every device at the beginning
                 self._global_weight_vector = torch.zeros(self._data_dim, 1)
@@ -193,7 +199,7 @@ class Worker:
             if response.status_code == 200:
                 if response.text == 'Miner':
                     # check if worker and miner are in the same epoch
-                    response_epoch = requests.get(f'{miner_address}/return_miner_epoch')
+                    response_epoch = requests.get(f'{miner_address}/get_miner_epoch')
                     if response_epoch.status_code == 200:
                         miner_epoch = int(response_epoch.text)
                         if miner_epoch == self.get_current_epoch():
@@ -209,7 +215,7 @@ class Worker:
                     if response_miner_accepting.text == "True":
                         miner_upload_endpoint = f"{miner_address}/new_transaction"
                         requests.post(miner_upload_endpoint,
-                            json=upload,
+                            data=json.dumps(upload),
                             headers={'Content-type': 'application/json'})
                     else:
                         # TODO What to do next?
@@ -251,27 +257,29 @@ class Worker:
             # iterations = the number of data points in a device
             # function(1)
             for data_point in self._data:
-                local_weight_track_grad = torch.tensor(local_weight, requires_grad=True)
+                local_weight_track_grad = local_weight.clone().detach().requires_grad_(True)
                 # loss of one data point with current local update fk_wil
+                
                 fk_wil = (data_point['x'].t()@local_weight_track_grad - data_point['y'])**2/2
                 # calculate delta_fk_wil
                 fk_wil.backward()
                 delta_fk_wil = local_weight_track_grad.grad
 
-                last_global_weight_track_grad = torch.tensor(self._global_weight_vector, requires_grad=True)
+                last_global_weight_track_grad = self._global_weight_vector.clone().detach().requires_grad_(True)
                 # loss of one data point with last updated global weights fk_wl
                 fk_wl = (data_point['x'].t()@last_global_weight_track_grad - data_point['y'])**2/2
                 # calculate delta_fk_wl
                 fk_wl.backward()
                 delta_fk_wl = last_global_weight_track_grad.grad
                 # record this value to upload
-                global_gradients_per_data_point.append(delta_fk_wl)
-
+                # need to convert delta_fk_wl tensor to list in order to make json.dumps() work
+                global_gradients_per_data_point.append({"update_tensor_to_list": delta_fk_wl.tolist(), "tensor_type": delta_fk_wl.type()})
+                # pdb.set_trace()
                 # calculate local update
-                local_weight = local_weight - (step_size/len(self._data)) * (delta_fk_wil - delta_fk_wl + delta_f_wl)
+                local_weight = local_weight - (self._step_size/len(self._data)) * (delta_fk_wil - delta_fk_wl + delta_f_wl)
 
             # device_id is not required. Just for debugging purpose
-            return {"device_id": self._idx, "local_weight_update": local_weight, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
+            return {"device_id": self._idx, "local_weight_update": {"update_tensor_to_list": local_weight.tolist(), "tensor_type": local_weight.type()}, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
 
     # TODO
     def worker_global_update(self):
@@ -382,7 +390,7 @@ def return_data():
 # used while miner check for block size in miner_receive_worker_updates()
 @app.route('/get_worker_epoch', methods=['GET'])
 def get_worker_epoch():
-    if not device.is_miner:
+    if not device.is_miner():
         return str(device.get_current_epoch())
     else:
         # TODO make return more reasonable
@@ -399,6 +407,8 @@ def runApp():
     device.worker_set_sample_size(SAMPLE_SIZE)
     print(f"{PROMPT} Step size set to {STEP_SIZE}")
     device.worker_set_step_size(STEP_SIZE)
+    print(f"{PROMPT} Worker set global_weight_to_all_0s.")
+    device.worker_set_global_weihgt()
     print(f"{PROMPT} Device is generating the dummy data.")
     device.worker_generate_dummy_data()
 
@@ -419,6 +429,7 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
+            print(f"{PROMPT} Miner must now enter sleeping to accept worker uploads!!!")
             cont = input("Next worker_associate_minder. Continue?")
         miner_address = device.worker_associate_minder()
         if DEBUG_MODE:
@@ -467,7 +478,7 @@ def sync_chain_from_dump(chain_dump):
         #     continue  # skip genesis block
         block = Block(block_data["_idx"],
                       block_data["_transactions"],
-                      block_data["_generation_time"],
+                      block_data["_block_generation_time"],
                       block_data["_previous_hash"],
                       block_data["_nonce"])
         pow_proof = block_data['_block_hash']
@@ -495,7 +506,7 @@ def register_new_peers():
     if DEBUG_MODE:
             print("register_new_peers() called, peers", repr(peers))
     # Return the consensus blockchain to the newly registered node so that the new node can sync
-    return {"chain_meta": query_blockchain()}
+    return query_blockchain()
 
 
 @app.route('/register_with', methods=['POST'])
@@ -507,8 +518,7 @@ def register_with_existing_node():
     register_with_node_address = request.get_json()["register_with_node_address"]
     if not register_with_node_address:
         return "Invalid request - must specify a register_with_node_address!", 400
-
-    data = {"registerer_node_address": request.host_url}
+    data = {"registerer_node_address": request.host_url[:-1]}
     headers = {'Content-Type': "application/json"}
 
     # Make a request to register with remote node and obtain information
@@ -520,7 +530,7 @@ def register_with_existing_node():
         # add the register_with_node_address as a peer
         peers.add(register_with_node_address)
         # sync the chain
-        chain_data_dump = json.loads(response.json()['chain_meta'])['chain']
+        chain_data_dump = response.json()['chain']
         sync_chain_from_dump(chain_data_dump)
         
         # NO NO NO sync the global weight from this register_with_node
@@ -529,9 +539,9 @@ def register_with_existing_node():
         # change to let node calculate global_weight_vector block by block
 
         # update peer list according to the register-with node
-        peers.update(json.loads(response.json()['chain_meta'])['peers'])
+        peers.update(response.json()['peers'])
         # remove itself if there is
-        peers.remove(request.host_url)
+        peers.remove(request.host_url[:-1])
         if DEBUG_MODE:
             print("register_with_existing_node() called, peers", repr(peers))
         return "Registration successful", 200
@@ -540,11 +550,11 @@ def register_with_existing_node():
         # return response.content, response.status_code, "why 404"
         return "weird"
 
-
+# TODO
+# block add time can use another list to store if necessary
 
 ''' debug methods '''
 # debug peer var
 @app.route('/debug_peers', methods=['GET'])
 def debug_peers():
     return repr(peers)
-    
