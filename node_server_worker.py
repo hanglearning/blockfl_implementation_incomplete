@@ -8,6 +8,7 @@ import time
 import torch
 import os
 import binascii
+import copy
 
 import json
 from hashlib import sha256
@@ -24,11 +25,12 @@ class Block:
         self._nonce = nonce
         # the hash of the current block, calculated by compute_hash
         self._block_hash = None
-    
+        
+    # remove time_stamp
     def compute_hash(self):
         block_content = json.dumps(self.__dict__, sort_keys=True)
         return sha256(block_content.encode()).hexdigest()
-    
+
     def set_hash(self):
         # compute_hash() also used to return value for verification
         self._block_hash = self.compute_hash()
@@ -49,6 +51,20 @@ class Block:
     def get_transactions(self):
         # get the updates from this block
         return self._transactions
+    
+    def remove_block_hash_to_verify_pow(self):
+        self._block_hash = None
+    
+    # setters
+    def set_previous_hash(self, hash_to_set):
+        self._previous_hash = hash_to_set
+
+    def add_verified_transaction(self, transaction):
+        # after verified in cross_verification()
+        self._transactions.append(transaction)
+
+    def set_block_generation_time(self):
+        self._block_generation_time = time.time()
 
 class Blockchain:
 
@@ -58,17 +74,20 @@ class Blockchain:
     def __init__(self):
         # it is fine to use a python list to store the chain for now
         # technically this should be _chain as well
-        self.chain = []
+        self._chain = []
 
     def get_chain_length(self):
-        return len(self.chain)
+        return len(self._chain)
 
     def get_last_block(self):
-        if len(self.chain) > 0:
-            return self.chain[-1]
+        if len(self._chain) > 0:
+            return self._chain[-1]
         else:
             # blockchain doesn't even have its genesis block
             return None
+
+    def append_block(self, block):
+        self._chain.append(block)
 
 class Worker:
     def __init__(self, idx):
@@ -213,6 +232,8 @@ class Worker:
                 response_miner_accepting = requests.get(f'{miner_address}/within_miner_wait_time')
                 if response_miner_accepting.status_code == 200:
                     if response_miner_accepting.text == "True":
+                        # send this worker's address to let miner remember to request this worker to download the block later
+                        upload['this_worker_address'] = request.host_url[:-1]
                         miner_upload_endpoint = f"{miner_address}/new_transaction"
                         requests.post(miner_upload_endpoint,
                             data=json.dumps(upload),
@@ -283,6 +304,9 @@ class Worker:
 
     # TODO
     def worker_global_update(self):
+        print("worker_global_update() called")
+        #TODO rebuild tensors
+        # START FROM HERE 042220
         transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
         Ni = SAMPLE_SIZE
         Ns = len(transactions_in_downloaded_block)*Ni
@@ -300,23 +324,25 @@ class Worker:
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
-        if self.blockchain.get_last_block() is not None:
+        block_to_add_without_hash = copy.deepcopy(block_to_add)
+        block_to_add_without_hash.remove_block_hash_to_verify_pow()
+        last_block = self._blockchain.get_last_block()
+        if last_block is not None:
             # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
-            last_block_hash = self.get_last_block.get_block_hash()
+            last_block_hash = last_block.compute_hash()
             if block_to_add.get_previous_hash() != last_block_hash:
                 # to be used as condition check later
                 return False
             # 2. check if the proof is valid(_block_hash is also verified).
-            if not check_pow_proof(block_to_add, pow_proof):
+            # remove its block hash to verify pow_proof as block hash was set after pow
+            if not self.check_pow_proof(block_to_add_without_hash, pow_proof):
                 return False
             # All verifications done.
-            self.blockchain.chain.append(block_to_add)
+            self._blockchain.append_block(block_to_add)
             return True
         else:
             # add genesis block
-            if not check_pow_proof(block_to_add, pow_proof):
-                return False
-            self.blockchain.chain.append(block_to_add)
+            self._blockchain.append_block(block_to_add)
             return True
     
     @staticmethod
@@ -330,7 +356,9 @@ class Worker:
     @classmethod
     def check_chain_validity(cls, chain_to_check):
         for block in chain_to_check[1:]:
-            if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].get_block_hash():
+            block_without_hash = copy.deepcopy(block)
+            block_without_hash.remove_block_hash_to_verify_pow()
+            if cls.check_pow_proof(block_without_hash, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash():
                 pass
             else:
                 return False
@@ -343,19 +371,19 @@ class Worker:
         """
 
         longest_chain = None
-        chain_len = len(self.blockchain.chain)
+        chain_len = self._blockchain.get_chain_length()
 
         for node in peers:
             response = requests.get(f'{node}/chain')
             length = response.json()['length']
             chain = response.json()['chain']
-            if length > chain_len and blockchain.check_chain_validity(chain):
+            if length > chain_len and self.check_chain_validity(chain):
                 # Longer valid chain found!
                 chain_len = length
                 longest_chain = chain
 
         if longest_chain:
-            self.blockchain.chain = longest_chain
+            self._blockchain._chain = longest_chain
             return True
 
         return False
@@ -447,24 +475,35 @@ def runApp():
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
         if DEBUG_MODE:
             cont = input("Next sleep 180. Continue?")
-        time.sleep(180)
+        # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
+        # time.sleep(180)
         
 @app.route('/download_block_from_miner', methods=['POST'])
 def download_block_from_miner():
+    print("download_block_from_miner() called")
     downloaded_block = request.get_json()["block_to_download"]
     pow_proof = request.get_json()["pow_proof"]
-    # TODO may need to construct block from dump!
-    device.add_block(downloaded_block, pow_proof)
+    # rebuild the block
+    rebuilt_downloaded_block = Block(downloaded_block["_idx"],
+                      downloaded_block["_transactions"],
+                      downloaded_block["_block_generation_time"],
+                      downloaded_block["_previous_hash"],
+                      downloaded_block["_nonce"])
+    pow_proof = downloaded_block['_block_hash']
+    added = device.add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
-    device.worker_global_update()
-    return "Success", 201
+    if added:
+        device.worker_global_update()
+        return "Success", 201
+    else:
+        return "Nah"
 
 # endpoint to return the node's copy of the chain.
 # Our application will be using this endpoint to query the contents in the chain to display
 @app.route('/chain', methods=['GET'])
 def query_blockchain():
     chain_data = []
-    for block in device.get_blockchain().chain:
+    for block in device.get_blockchain()._chain:
         chain_data.append(block.__dict__)
     return json.dumps({"length": len(chain_data),
                        "chain": chain_data,
@@ -482,9 +521,14 @@ def sync_chain_from_dump(chain_dump):
                       block_data["_previous_hash"],
                       block_data["_nonce"])
         pow_proof = block_data['_block_hash']
+        # in add_block, check if pow_proof and previous_hash fileds both are valid
         added = device.add_block(block, pow_proof)
         if not added:
             raise Exception("The chain dump is tampered!!")
+        else:
+            # once again a sanity check
+            if pow_proof == block.compute_hash():
+                block.set_hash()
             # break
     # return generated_blockchain
 
