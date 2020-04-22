@@ -263,11 +263,14 @@ class Worker:
             last_block = self._blockchain.get_last_block()
             if last_block is not None:
                 transactions = last_block.get_transactions()
-                ''' transactions = [{'device_id': _idx # used for debugging, updated_weigts': w, 'updated_gradients': [f1wl, f2wl ... fnwl]} ... ] '''
+                ''' transactions = [{'device_id': 'ddf993e5', 'local_weight_update': {'update_tensor_to_list': [[0.0], [0.0], [0.0], [0.0]], 'tensor_type': 'torch.FloatTensor'}, 'global_gradients_per_data_point': [{'update_tensor_to_list': [[-15.794557571411133], [-9.352561950683594], [-90.67684936523438], [-80.69305419921875]], 'tensor_type': 'torch.FloatTensor'}, {'update_tensor_to_list': [[-132.57232666015625], [-284.4437561035156], [-53.215885162353516], [-13.190389633178711]], 'tensor_type': 'torch.FloatTensor'}, {'update_tensor_to_list': [[-35.0189094543457], [-6.117635250091553], [-23.661569595336914], [-3.7096316814422607]], 'tensor_type': 'torch.FloatTensor'}], 'computation_time': 0.16167688369750977, 'this_worker_address': 'http://localhost:5001', 'tx_received_time': 1587539183.5140128}] '''
                 tensor_accumulator = torch.zeros_like(self._global_weight_vector)
                 for update_per_device in transactions:
-                    for data_point_gradient in update_per_device['updated_gradients']:
-                        tensor_accumulator += data_point_gradient
+                    for data_point_gradient in update_per_device['global_gradients_per_data_point']:
+                        data_point_gradient_list = data_point_gradient['update_tensor_to_list']
+                        data_point_gradient_tensor_type = data_point_gradient['tensor_type']
+                        data_point_gradient_tensor = getattr(torch, data_point_gradient_tensor_type[6:])(data_point_gradient_list)
+                        tensor_accumulator += data_point_gradient_tensor
                 num_of_device_updates = len(transactions)
                 delta_f_wl = tensor_accumulator/(num_of_device_updates * self._sample_size)
             else:
@@ -306,15 +309,24 @@ class Worker:
     def worker_global_update(self):
         print("worker_global_update() called")
         #TODO rebuild tensors
-        # START FROM HERE 042220
         transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
+        print("transactions_in_downloaded_block", transactions_in_downloaded_block)
         Ni = SAMPLE_SIZE
-        Ns = len(transactions_in_downloaded_block)*Ni
+        Nd = len(transactions_in_downloaded_block)
+        Ns = Nd * Ni
         global_weight_tensor_accumulator = torch.zeros_like(self._global_weight_vector)
         for update in transactions_in_downloaded_block:
-            updated_weigts = update["updated_weigts"]
-            tensor_accumulator += (Ni/Ns)*(updated_weigts - self._global_weight_vector)
+            # convert list to tensor 
+            # https://www.aiworkbox.com/lessons/convert-list-to-pytorch-tensor
+            # Call function by function name
+            # https://stackoverflow.com/questions/3061/calling-a-function-of-a-module-by-using-its-name-a-string
+            updated_weigts_list = update["local_weight_update"]["update_tensor_to_list"]
+            updated_weigts_tensor_type = update["local_weight_update"]["tensor_type"]
+            updated_weigts_tensor = getattr(torch, updated_weigts_tensor_type[6:])(updated_weigts_list)
+            print("updated_weigts_tensor", updated_weigts_tensor)
+            global_weight_tensor_accumulator += (Ni/Ns)*(updated_weigts_tensor - self._global_weight_vector)
         self._global_weight_vector += global_weight_tensor_accumulator
+        print('self._global_weight_vector', self._global_weight_vector)
         print("Global Update Done.")
 
     ''' Common Methods '''
@@ -477,6 +489,8 @@ def runApp():
             cont = input("Next sleep 180. Continue?")
         # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
         # time.sleep(180)
+        if DEBUG_MODE:
+            cont = input("Next epoch. Continue?")
         
 @app.route('/download_block_from_miner', methods=['POST'])
 def download_block_from_miner():
@@ -492,6 +506,8 @@ def download_block_from_miner():
     pow_proof = downloaded_block['_block_hash']
     added = device.add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
+    # START FROM HERE for the 2nd epoch 042220
+    print(added)
     if added:
         device.worker_global_update()
         return "Success", 201
