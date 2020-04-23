@@ -167,6 +167,7 @@ class Miner:
         if DEBUG_MODE:
             print("get_all_current_epoch_miners() called", self._current_epoch_miner_nodes)
 
+    # TODO should record epoch number in case accidentally remove updates from this epoch
     def clear_all_vars_for_new_epoch(self):
         # clear updates from workers and miners from the last epoch
         self._associated_workers.clear()
@@ -203,7 +204,7 @@ class Miner:
         candidate_block.set_block_generation_time()        
         # it makes sense to first verify the updates itself received
         # verification machenism not specified in paper, so here we only verify the data_dim
-        # pdb.set_trace()
+        pdb.set_trace()
         if self._received_transactions:
             for update in self._received_transactions:
                 if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
@@ -219,7 +220,6 @@ class Miner:
                 else:
                     pass
                 self.get_rewards(1)
-
         if DEBUG_MODE:
             print("Rewards after cross_verification", self._rewards)
             print("candidate_block", candidate_block)
@@ -230,6 +230,8 @@ class Miner:
     # TODO or rewards here?
     def proof_of_work(self, candidate_block):
         ''' Brute Force the nonce. May change to PoS by Dr. Jihong Park '''
+        if DEBUG_MODE:
+            print(f"Before PoW, block nonce is {candidate_block._nonce} and block hash is {candidate_block._block_hash}.")
         if self._is_miner:
             # pdb.set_trace()
             current_hash = candidate_block.compute_hash()
@@ -239,6 +241,8 @@ class Miner:
             # return the qualified hash as a PoW proof, to be verified by other devices before adding the block
             # also set its hash as well. _block_hash is the same as pow proof
             candidate_block.set_hash()
+            if DEBUG_MODE:
+                print(f"Before PoW, block nonce is {candidate_block._nonce} and block hash is {candidate_block._block_hash}.")
             return current_hash, candidate_block
         else:
             print('Worker does not perform PoW.')
@@ -284,7 +288,6 @@ class Miner:
 
     # TODO THIS FUNCTION MUST ABORT IF RECEIVED A BLOCK FROM ANOTHER MINER!!!
     def miner_mine_block(self, block_to_mine):
-        # pdb.set_trace()
         if self._is_miner:
             if block_to_mine.get_transactions():
                 # TODO
@@ -299,7 +302,7 @@ class Miner:
                 # mine the candidate block by PoW, inside which the _block_hash is also set
                 pow_proof, mined_block = self.proof_of_work(block_to_mine)
                 # propagate the block in main()
-
+                pdb.set_trace()
                 if DEBUG_MODE:
                     print("miner_mine_block() called", pow_proof, mined_block)
                 return pow_proof, mined_block
@@ -315,10 +318,8 @@ class Miner:
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
-        block_to_add_without_hash = copy.deepcopy(block_to_add)
-        block_to_add_without_hash.remove_block_hash_to_verify_pow()
         last_block = self._blockchain.get_last_block()
-        # pdb.set_trace()
+        pdb.set_trace()
         if last_block is not None:
             # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
             last_block_hash = last_block.compute_hash()
@@ -327,14 +328,14 @@ class Miner:
                 return False
             # 2. check if the proof is valid(_block_hash is also verified).
             # remove its block hash to verify pow_proof as block hash was set after pow
-            if not self.check_pow_proof(block_to_add_without_hash, pow_proof):
+            if not self.check_pow_proof(block_to_add, pow_proof):
                 return False
             # All verifications done.
             self._blockchain.append_block(block_to_add)
             return True
         else:
             # only check 2. above
-            if not self.check_pow_proof(block_to_add_without_hash, pow_proof):
+            if not self.check_pow_proof(block_to_add, pow_proof):
                 return False
             # add genesis block
             self._blockchain.append_block(block_to_add)
@@ -344,7 +345,12 @@ class Miner:
     def check_pow_proof(block_to_check, pow_proof):
         # if not (block_to_add._block_hash.startswith('0' * Blockchain.difficulty) and block_to_add._block_hash == pow_proof): WRONG
         # shouldn't check the block_hash directly as it's not trustworthy and it's also private
-        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check.compute_hash()
+        pdb.set_trace()
+        # Why this is None?
+        # block_to_check_without_hash = copy.deepcopy(block_to_check).remove_block_hash_to_verify_pow()
+        block_to_check_without_hash = copy.deepcopy(block_to_check)
+        block_to_check_without_hash.remove_block_hash_to_verify_pow()
+        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check_without_hash.compute_hash()
 
     ''' consensus algorithm for the longest chain '''
     
@@ -358,9 +364,7 @@ class Miner:
             pass
         else:
             for block in chain_to_check[1:]:
-                block_without_hash = copy.deepcopy(block)
-                block_without_hash.remove_block_hash_to_verify_pow()
-                if cls.check_pow_proof(block_without_hash, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash():
+                if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash():
                     pass
                 else:
                     return False
@@ -531,13 +535,14 @@ def runApp():
         # TODO fork ACK?
         if DEBUG_MODE:
             cont = input("Next add_block. Continue?")
-        device.add_block(candidate_block, pow_proof)
+        added = device.add_block(mined_block, pow_proof)
         # send updates to its associated miners
         if DEBUG_MODE:
             cont = input("Next request_associated_workers_download. Continue?")
-        device.request_associated_workers_download(pow_proof)
-        if DEBUG_MODE:
-            cont = input("Next epoch. Continue?")
+            if added:
+                device.request_associated_workers_download(pow_proof)
+                if DEBUG_MODE:
+                    cont = input("Next epoch. Continue?")
 
 
 # endpoint to return the node's copy of the chain.

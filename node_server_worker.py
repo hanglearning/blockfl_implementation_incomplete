@@ -175,7 +175,7 @@ class Worker:
             print("The data of this worker has already been initialized. Changing data is not currently implemented in this version.")
 
     # worker global weight initialization or update
-    def worker_set_global_weihgt(self, weight=None):
+    def worker_init_global_weihgt(self):
         if self._is_miner:
             print("Miner does not set weight values")
         else:
@@ -184,14 +184,13 @@ class Worker:
                 # Or, we should hard code a vector with some small values for the device class as it has to be the same for every device at the beginning
                 self._global_weight_vector = torch.zeros(self._data_dim, 1)
             else:
-                self._global_weight_vector = weight
+                print("This function shouldn't be called.")
     
     def worker_associate_minder(self):
         if self._is_miner:
             print("Miner does not associate with another miner.")
             return None
         else:
-            global peers
             miner_nodes = set()
             for node in peers:
                 response = requests.get(f'{node}/get_role')
@@ -207,7 +206,6 @@ class Worker:
             # no device in this epoch is assigned as a miner
             return None
     
-    # TODO
     def worker_upload_to_miner(self, upload, miner_address):
         if self._is_miner:
             print("Worker does not accept other workers' updates directly")
@@ -336,8 +334,6 @@ class Worker:
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
-        block_to_add_without_hash = copy.deepcopy(block_to_add)
-        block_to_add_without_hash.remove_block_hash_to_verify_pow()
         last_block = self._blockchain.get_last_block()
         if last_block is not None:
             # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
@@ -347,12 +343,15 @@ class Worker:
                 return False
             # 2. check if the proof is valid(_block_hash is also verified).
             # remove its block hash to verify pow_proof as block hash was set after pow
-            if not self.check_pow_proof(block_to_add_without_hash, pow_proof):
+            if not self.check_pow_proof(block_to_add, pow_proof):
                 return False
             # All verifications done.
             self._blockchain.append_block(block_to_add)
             return True
         else:
+            # only check 2. above
+            if not self.check_pow_proof(block_to_add, pow_proof):
+                return False
             # add genesis block
             self._blockchain.append_block(block_to_add)
             return True
@@ -361,19 +360,29 @@ class Worker:
     def check_pow_proof(block_to_check, pow_proof):
         # if not (block_to_add._block_hash.startswith('0' * Blockchain.difficulty) and block_to_add._block_hash == pow_proof): WRONG
         # shouldn't check the block_hash directly as it's not trustworthy and it's also private
-        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check.compute_hash()
+        # pdb.set_trace()
+        # Why this is None?
+        # block_to_check_without_hash = copy.deepcopy(block_to_check).remove_block_hash_to_verify_pow()
+        block_to_check_without_hash = copy.deepcopy(block_to_check)
+        block_to_check_without_hash.remove_block_hash_to_verify_pow()
+        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check_without_hash.compute_hash()
 
     ''' consensus algorithm for the longest chain '''
     
+    # TODO Debug and write
     @classmethod
     def check_chain_validity(cls, chain_to_check):
-        for block in chain_to_check[1:]:
-            block_without_hash = copy.deepcopy(block)
-            block_without_hash.remove_block_hash_to_verify_pow()
-            if cls.check_pow_proof(block_without_hash, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash():
-                pass
-            else:
-                return False
+        chain_len = chain_to_check.get_chain_length()
+        if chain_len == 0:
+            pass
+        elif chain_len == 1:
+            pass
+        else:
+            for block in chain_to_check[1:]:
+                if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash():
+                    pass
+                else:
+                    return False
         return True
 
     # TODO
@@ -448,7 +457,7 @@ def runApp():
     print(f"{PROMPT} Step size set to {STEP_SIZE}")
     device.worker_set_step_size(STEP_SIZE)
     print(f"{PROMPT} Worker set global_weight_to_all_0s.")
-    device.worker_set_global_weihgt()
+    device.worker_init_global_weihgt()
     print(f"{PROMPT} Device is generating the dummy data.")
     device.worker_generate_dummy_data()
 
@@ -469,13 +478,13 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            print(f"{PROMPT} Miner must now enter sleeping to accept worker uploads!!!")
             cont = input("Next worker_associate_minder. Continue?")
         miner_address = device.worker_associate_minder()
         if DEBUG_MODE:
             print("miner_address", miner_address)
         # while miner_address is not None:
         if miner_address is not None:
+            print(f"{PROMPT} Miner must now enter sleeping to accept worker uploads!!!")
             print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.")
             # worker uploads data to miner
             device.worker_upload_to_miner(upload, miner_address)
@@ -506,7 +515,6 @@ def download_block_from_miner():
     pow_proof = downloaded_block['_block_hash']
     added = device.add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
-    # START FROM HERE for the 2nd epoch 042220
     print(added)
     if added:
         device.worker_global_update()
