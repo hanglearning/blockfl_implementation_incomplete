@@ -17,9 +17,12 @@ DEBUG_MODE = True # press any key to continue
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
-    def __init__(self, idx, transactions=[], block_generation_time=None, previous_hash=None, nonce=0):
+    # https://stackoverflow.com/questions/3161827/what-am-i-doing-wrong-python-object-instantiation-keeping-data-from-previous-in
+    # transactions=[] causing errors. Do not pass mutable object as a default value
+    # def __init__(self, idx, transactions=[], block_generation_time=None, previous_hash=None, nonce=0):
+    def __init__(self, idx, transactions=None, block_generation_time=None, previous_hash=None, nonce=0):
         self._idx = idx
-        self._transactions = transactions
+        self._transactions = transactions or []
         self._block_generation_time = block_generation_time
         self._previous_hash = previous_hash
         self._nonce = nonce
@@ -95,6 +98,7 @@ class Miner:
         self._is_miner = True
         # miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth, and also miner can use this info to obtain the epoch number to check if the uploaded updates from the worker are meant to be put into the same epoch
         self._blockchain = Blockchain()
+        self._ip_and_port = None
         ''' attributes for miners '''
         self._received_transactions = []
         # used to broadcast block for workers to do global updates
@@ -119,6 +123,9 @@ class Miner:
     def get_current_epoch(self):
         return self._blockchain.get_chain_length()+1
 
+    def get_ip_and_port(self):
+        return self._ip_and_port
+
 
     ''' setters '''
     # set the consensused blockchain
@@ -127,6 +134,9 @@ class Miner:
 
     def is_miner(self):
         return self.is_miner
+
+    def set_ip_and_port(self, ip_and_port):
+        self._ip_and_port = ip_and_port
 
     ''' Functions for Miners '''
 
@@ -139,6 +149,7 @@ class Miner:
     def get_all_current_epoch_workers(self):
         print("get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
         # self._current_epoch_worker_nodes.clear()
+        potential_new_peers = set()
         for node in peers:
             response = requests.get(f'{node}/get_role')
             if response.status_code == 200:
@@ -147,13 +158,24 @@ class Miner:
                     if response2.status_code == 200:
                         if int(response2.text) == self.get_current_epoch():
                             self._current_epoch_worker_nodes.add(node)
+                            # side action - update (miner) peers from all workers
+                            response3 = requests.get(f'{node}/get_peers')
+                            if response3.status_code == 200:
+                                potential_new_peers.update(response3.json()['peers'])
+                            
             else:
                 return response.status_code
+        peers.update(potential_new_peers)
+        try:
+            peers.remove(self._ip_and_port)
+        except:
+            pass
         if DEBUG_MODE:
             print("After get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
         
     def get_all_current_epoch_miners(self):
         # self._current_epoch_miner_nodes.clear()
+        potential_new_peers = set()
         for node in peers:
             response = requests.get(f'{node}/get_role')
             if response.status_code == 200:
@@ -161,9 +183,18 @@ class Miner:
                     response2 = requests.get(f'{node}/get_miner_epoch')
                     if response2.status_code == 200:
                         if int(response2.text) == device.get_current_epoch():
-                            self._current_epoch_miner_nodes.append(node)
+                            self._current_epoch_miner_nodes.add(node)
+                            # a chance to update peer list as well
+                            response3 = requests.get(f'{node}/get_peers')
+                            if response3.status_code == 200:
+                                potential_new_peers.update(response3.json()['peers'])
             else:
                 return response.status_code
+        peers.update(potential_new_peers)
+        try:
+            peers.remove(self._ip_and_port)
+        except:
+            pass
         if DEBUG_MODE:
             print("get_all_current_epoch_miners() called", self._current_epoch_miner_nodes)
 
@@ -183,8 +214,8 @@ class Miner:
         self._received_updates_from_miners.append(one_miner_updates)
 
     def request_associated_workers_download(self, pow_proof):
-        # pdb.set_trace()
         block_to_download = self._blockchain.get_last_block()
+        # pdb.set_trace()
         data = {"block_to_download": block_to_download.__dict__, "pow_proof": pow_proof}
         headers = {'Content-Type': "application/json"}
         for worker in self._associated_workers:
@@ -197,7 +228,8 @@ class Miner:
     # TODO need a timer
     def cross_verification(self):
         if DEBUG_MODE:
-            print("cross_verification() called")
+            print("cross_verification() called, initial rewards ", self._rewards)
+            # pdb.set_trace()
         # Block index starting at 0
         candidate_block = Block(idx=self._blockchain.get_chain_length())
         # diff miners most likely have diff generation time but we add the one that's mined
@@ -205,23 +237,32 @@ class Miner:
         # it makes sense to first verify the updates itself received
         # verification machenism not specified in paper, so here we only verify the data_dim
         pdb.set_trace()
+        # if DEBUG_MODE:
+        #     print("All block IDs")
+        #     for block in self.get_blockchain()._chain:
+        #         print(id(block))
+        #     print("id of candidate_block", id(candidate_block))
+        #     print("self._received_transactions", self._received_transactions)
         if self._received_transactions:
             for update in self._received_transactions:
                 if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
                     candidate_block.add_verified_transaction(update)
                 else:
-                    pass
-                self.get_rewards(1)
+                    print("Error cross-verification SELF")
+                self.get_rewards(DATA_DIM)
+        print("After self-verification, rewards ", self._rewards)
         # cross-verification
         if self._received_updates_from_miners:
-            for update in self._received_updates_from_miners:
-                if len(update['received_updates']['local_weight_update']) == DATA_DIM:
-                    candidate_block.add_verified_transaction(update)
-                else:
-                    pass
-                self.get_rewards(1)
+            for update_from_other_miner in self._received_updates_from_miners:
+                # pdb.set_trace()
+                for update in update_from_other_miner['received_updates']:
+                    if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
+                        candidate_block.add_verified_transaction(update)
+                    else:
+                        print("Error cross-verification OTHER MINER")
+                self.get_rewards(DATA_DIM)
         if DEBUG_MODE:
-            print("Rewards after cross_verification", self._rewards)
+            print("Rewards after cross_verification ", self._rewards)
             print("candidate_block", candidate_block)
 
         # when timer ends
@@ -249,6 +290,8 @@ class Miner:
 
     def miner_receive_worker_updates(self, transaction):
         if self._is_miner:
+            # if DEBUG_MODE:
+            #     print("self._received_transactions", self._received_transactions)
             self._received_transactions.append(transaction)
             print(f"Miner {self.get_idx} received updates from {transaction['device_id']}")
             # check block size
@@ -272,12 +315,13 @@ class Miner:
             response = requests.post(miner + "/receive_updates_from_miner", data=json.dumps(data), headers=headers)
             if response.status_code == 200:
                 print(f'Miner {self._idx} sent unconfirmed updates to miner {miner}')
+        return "ok"
 
     def miner_propogate_the_block(self, block_to_propogate, pow_proof):
         # refresh the miner nodes in case there's any gone offline
         device.get_all_current_epoch_miners()
 
-        data = {"miner_id": self._idx, "propogated_block": block_to_propogate, "pow_proof": pow_proof}
+        data = {"miner_id": self._idx, "propogated_block": block_to_propogate.__dict__, "pow_proof": pow_proof}
         headers = {'Content-Type': "application/json"}
 
         for miner in self._current_epoch_miner_nodes:
@@ -302,7 +346,7 @@ class Miner:
                 # mine the candidate block by PoW, inside which the _block_hash is also set
                 pow_proof, mined_block = self.proof_of_work(block_to_mine)
                 # propagate the block in main()
-                pdb.set_trace()
+                # pdb.set_trace()
                 if DEBUG_MODE:
                     print("miner_mine_block() called", pow_proof, mined_block)
                 return pow_proof, mined_block
@@ -319,7 +363,7 @@ class Miner:
         A function that adds the block to the chain after two verifications(sanity check).
         """
         last_block = self._blockchain.get_last_block()
-        pdb.set_trace()
+        # pdb.set_trace()
         if last_block is not None:
             # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
             last_block_hash = last_block.compute_hash()
@@ -345,7 +389,7 @@ class Miner:
     def check_pow_proof(block_to_check, pow_proof):
         # if not (block_to_add._block_hash.startswith('0' * Blockchain.difficulty) and block_to_add._block_hash == pow_proof): WRONG
         # shouldn't check the block_hash directly as it's not trustworthy and it's also private
-        pdb.set_trace()
+        # pdb.set_trace()
         # Why this is None?
         # block_to_check_without_hash = copy.deepcopy(block_to_check).remove_block_hash_to_verify_pow()
         block_to_check_without_hash = copy.deepcopy(block_to_check)
@@ -380,7 +424,7 @@ class Miner:
         chain_len = self._blockchain.get_chain_length()
 
         for node in peers:
-            response = requests.get(f'{node}/chain')
+            response = requests.get(f'{node}/get_chain_meta')
             length = response.json()['length']
             chain = response.json()['chain']
             if length > chain_len and self.check_chain_validity(chain):
@@ -462,6 +506,7 @@ def new_transaction():
             if not update_data.get(field):
                 return "Invalid transaction(update) data", 404
         device.associate_worker(update_data['this_worker_address'])
+        peers.add(update_data['this_worker_address'])
         update_data["tx_received_time"] = time.time()
         device.miner_receive_worker_updates(update_data)
         if DEBUG_MODE:
@@ -474,7 +519,7 @@ def receive_updates_from_miner():
     with_updates = request.get_json()["received_updates"]
     one_miner_updates = {"from_miner": miner_id, "received_updates": with_updates}
     device.add_received_updates_from_miners(one_miner_updates)
-    print(f"Received updates from miner {miner_id}.")
+    return f"Received updates from miner {miner_id}."
     
 @app.route('/receive_propogated_block', methods=['POST'])
 def receive_propogated_block():
@@ -486,6 +531,13 @@ def receive_propogated_block():
     # # check pow proof
     # if pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == propogated_block.compute_hash(): DONE IN add_block
     # add this block to the chain
+    block = Block(propogated_block["_idx"],
+                propogated_block["_transactions"],
+                propogated_block["_block_generation_time"],
+                propogated_block["_previous_hash"],
+                propogated_block["_nonce"])
+    pow_proof = propogated_block['_block_hash']
+    # START FROM HERE. if a propogated block is added then its own block can't be added. Think how to resolve this
     device.add_block(propogated_block, pow_proof)
 
 
@@ -493,6 +545,7 @@ def receive_propogated_block():
 # assign tasks based on role
 @app.route('/')
 def runApp():
+
     # wait for worker maximum wating time
     while True:
         print(f"Starting epoch {device.get_current_epoch()}...")
@@ -548,6 +601,21 @@ def runApp():
 # endpoint to return the node's copy of the chain.
 # Our application will be using this endpoint to query the contents in the chain to display
 @app.route('/chain', methods=['GET'])
+def display_chain():
+    chain = json.loads(query_blockchain())["chain"]
+    for block_iter in range(len(chain)):
+        print(f"Block #{block_iter+1}")
+        block = chain[block_iter]
+        print("_idx", block["_idx"])
+        for tx_iter in range(len(block["_transactions"])):
+            print(f"\nTransaction {tx_iter}\n", block["_transactions"][tx_iter], "\n")
+        print("_block_generation_time", block["_block_generation_time"])
+        print("_previous_hash", block["_previous_hash"])
+        print("_nonce", block["_nonce"])
+        print("_block_hash", block["_block_hash"])
+    return "Chain Returned"
+
+@app.route('/get_chain_meta', methods=['GET'])
 def query_blockchain():
     chain_data = []
     for block in device.get_blockchain()._chain:
@@ -555,6 +623,11 @@ def query_blockchain():
     return json.dumps({"length": len(chain_data),
                        "chain": chain_data,
                        "peers": list(peers)})
+
+
+@app.route('/get_peers', methods=['GET'])
+def query_peers():
+    return json.dumps({"peers": list(peers)})
 
 
 # TODO helper function used in register_with_existing_node() only while registering node
@@ -592,6 +665,13 @@ def register_new_peers():
     if not node_address:
         return "Invalid data", 400
 
+    transferred_this_node_address = request.get_json()["registerer_with_node_address"]
+    if device.get_ip_and_port() == None:
+        # this is a dirty hack for the first node in the network to set its ip and node and used to remove itself from peers
+        device.set_ip_and_port(transferred_this_node_address)
+    if device.get_ip_and_port() != transferred_this_node_address:
+        return "This should never happen"
+
     # Add the node to the peer list
     peers.add(node_address)
     if DEBUG_MODE:
@@ -606,10 +686,13 @@ def register_with_existing_node():
     Internally calls the `register_node` endpoint to register current node with the node specified in the
     request, and sync the blockchain as well as peer data.
     """
+    # assign ip and port for itself, mainly used to remove itself from peers list
+    device.set_ip_and_port(request.host_url[:-1])
+
     register_with_node_address = request.get_json()["register_with_node_address"]
     if not register_with_node_address:
         return "Invalid request - must specify a register_with_node_address!", 400
-    data = {"registerer_node_address": request.host_url[:-1]}
+    data = {"registerer_node_address": request.host_url[:-1], "registerer_with_node_address": register_with_node_address}
     headers = {'Content-Type': "application/json"}
 
     # Make a request to register with remote node and obtain information
@@ -632,7 +715,12 @@ def register_with_existing_node():
         # update peer list according to the register-with node
         peers.update(response.json()['peers'])
         # remove itself if there is
-        peers.remove(request.host_url[:-1])
+        try:
+            if DEBUG_MODE:
+                print("Self IP and Port", device.get_ip_and_port())
+            peers.remove(device.get_ip_and_port())
+        except:
+            pass
         if DEBUG_MODE:
             print("register_with_existing_node() called, peers", repr(peers))
         return "Registration successful", 200
@@ -640,6 +728,7 @@ def register_with_existing_node():
         # if something goes wrong, pass it on to the API response
         # return response.content, response.status_code, "why 404"
         return "weird"
+
 
 # TODO
 # block add time can use another list to store if necessary

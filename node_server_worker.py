@@ -17,9 +17,9 @@ DEBUG_MODE = True # press any key to continue
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
-    def __init__(self, idx, transactions=[], block_generation_time=None, previous_hash=None, nonce=0):
+    def __init__(self, idx, transactions=None, block_generation_time=None, previous_hash=None, nonce=0):
         self._idx = idx
-        self._transactions = transactions
+        self._transactions = transactions or []
         self._block_generation_time = block_generation_time
         self._previous_hash = previous_hash
         self._nonce = nonce
@@ -93,6 +93,8 @@ class Worker:
     def __init__(self, idx):
         self._idx = idx
         self._is_miner = False
+        self._ip_and_port = None
+        self._blockchain = Blockchain()
         ''' attributes for workers '''
         # data is a python list of samples, within which each data sample is a dictionary of {x, y}, where x is a numpy column vector and y is a scalar value
         self._data = []
@@ -104,8 +106,6 @@ class Worker:
         self._data_dim = None
         # sample size(Ni)
         self._sample_size = None
-        # miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth
-        self._blockchain = Blockchain()
 
     ''' getters '''
     # get device id
@@ -121,6 +121,9 @@ class Worker:
 
     def get_data(self):
         return self._data
+    
+    def get_ip_and_port(self):
+        return self._ip_and_port
 
     # get global_weight_vector, used while being the register_with node to sync with the registerer node
     def get_global_weight_vector(self):
@@ -137,6 +140,9 @@ class Worker:
 
     def is_miner(self):
         return self._is_miner
+
+    def set_ip_and_port(self, ip_and_port):
+        self._ip_and_port = ip_and_port
 
     ''' Functions for Workers '''
 
@@ -186,19 +192,32 @@ class Worker:
             else:
                 print("This function shouldn't be called.")
     
-    def worker_associate_minder(self):
+    def worker_associate_miner_with_same_epoch(self):
         if self._is_miner:
             print("Miner does not associate with another miner.")
             return None
         else:
+            potential_new_peers = set()
             miner_nodes = set()
             for node in peers:
                 response = requests.get(f'{node}/get_role')
                 if response.status_code == 200:
                     if response.text == 'Miner':
-                        miner_nodes.add(node)
+                        response2 = requests.get(f'{node}/get_miner_epoch')
+                        if response2.status_code == 200:
+                            if int(response2.text) == self.get_current_epoch():
+                                miner_nodes.add(node)
+                                # side action - update (worker) peers from all miners
+                                response3 = requests.get(f'{node}/get_peers')
+                                if response3.status_code == 200:
+                                    potential_new_peers.update(response3.json()['peers'])
                 else:
-                    return "Error in worker_associate_minder()", response.status_code
+                    return "Error in worker_associate_miner_with_same_epoch()", response.status_code
+            peers.update(potential_new_peers)
+            try:
+                peers.remove(self._ip_and_port)
+            except:
+                pass
         # associate a random miner
         if miner_nodes:
             return random.sample(miner_nodes, 1)[0]
@@ -231,7 +250,7 @@ class Worker:
                 if response_miner_accepting.status_code == 200:
                     if response_miner_accepting.text == "True":
                         # send this worker's address to let miner remember to request this worker to download the block later
-                        upload['this_worker_address'] = request.host_url[:-1]
+                        upload['this_worker_address'] = self._ip_and_port
                         miner_upload_endpoint = f"{miner_address}/new_transaction"
                         requests.post(miner_upload_endpoint,
                             data=json.dumps(upload),
@@ -330,7 +349,7 @@ class Worker:
     ''' Common Methods '''
 
     # including adding the genesis block
-    def add_block(self, block_to_add, pow_proof):
+    def worker_add_block(self, block_to_add, pow_proof):
         """
         A function that adds the block to the chain after two verifications(sanity check).
         """
@@ -340,19 +359,28 @@ class Worker:
             last_block_hash = last_block.compute_hash()
             if block_to_add.get_previous_hash() != last_block_hash:
                 # to be used as condition check later
+                print("called 1")
+                print("block_to_add.get_previous_hash()", block_to_add.get_previous_hash())
+                print("last_block_hash", last_block_hash)
                 return False
             # 2. check if the proof is valid(_block_hash is also verified).
             # remove its block hash to verify pow_proof as block hash was set after pow
             if not self.check_pow_proof(block_to_add, pow_proof):
+                print("called 2")
                 return False
             # All verifications done.
+            # specific to worker - set block hash
+            block_to_add.set_hash()
             self._blockchain.append_block(block_to_add)
             return True
         else:
             # only check 2. above
             if not self.check_pow_proof(block_to_add, pow_proof):
+                print("called 3")
                 return False
             # add genesis block
+            # specific to worker - set block hash
+            block_to_add.set_hash()
             self._blockchain.append_block(block_to_add)
             return True
     
@@ -395,7 +423,7 @@ class Worker:
         chain_len = self._blockchain.get_chain_length()
 
         for node in peers:
-            response = requests.get(f'{node}/chain')
+            response = requests.get(f'{node}/get_chain_meta')
             length = response.json()['length']
             chain = response.json()['chain']
             if length > chain_len and self.check_chain_validity(chain):
@@ -449,7 +477,6 @@ def get_worker_epoch():
 # assign tasks based on role
 @app.route('/')
 def runApp():
-
     print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
     device.set_data_dim(DATA_DIM)
     print(f"{PROMPT} Device is setting sample size {SAMPLE_SIZE}")
@@ -478,8 +505,8 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            cont = input("Next worker_associate_minder. Continue?")
-        miner_address = device.worker_associate_minder()
+            cont = input("Next worker_associate_miner_with_same_epoch. Continue?")
+        miner_address = device.worker_associate_miner_with_same_epoch()
         if DEBUG_MODE:
             print("miner_address", miner_address)
         # while miner_address is not None:
@@ -492,7 +519,7 @@ def runApp():
         #     wait_new_miner_time = 10
         #     print(f"No miner in peers yet. Re-requesting miner address in {wait_new_miner_time} secs")
         #     time.sleep(wait_new_miner_time)
-        #     miner_address = device.worker_associate_minder()
+        #     miner_address = device.worker_associate_miner_with_same_epoch()
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
         if DEBUG_MODE:
             cont = input("Next sleep 180. Continue?")
@@ -513,8 +540,9 @@ def download_block_from_miner():
                       downloaded_block["_previous_hash"],
                       downloaded_block["_nonce"])
     pow_proof = downloaded_block['_block_hash']
-    added = device.add_block(rebuilt_downloaded_block, pow_proof)
+    added = device.worker_add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
+    print("rebuilt_downloaded_block", rebuilt_downloaded_block.__dict__)
     print(added)
     if added:
         device.worker_global_update()
@@ -525,6 +553,22 @@ def download_block_from_miner():
 # endpoint to return the node's copy of the chain.
 # Our application will be using this endpoint to query the contents in the chain to display
 @app.route('/chain', methods=['GET'])
+def display_chain():
+    chain = json.loads(query_blockchain())["chain"]
+    for block_iter in range(len(chain)):
+        print(f"Block #{block_iter+1}")
+        block = chain[block_iter]
+        print("_idx", block["_idx"])
+        for tx_iter in range(len(block["_transactions"])):
+            print(f"\nTransaction {tx_iter}\n", block["_transactions"][tx_iter], "\n")
+        print("_block_generation_time", block["_block_generation_time"])
+        print("_previous_hash", block["_previous_hash"])
+        print("_nonce", block["_nonce"])
+        print("_block_hash", block["_block_hash"])
+    return "Chain Returned"
+
+
+@app.route('/get_chain_meta', methods=['GET'])
 def query_blockchain():
     chain_data = []
     for block in device.get_blockchain()._chain:
@@ -533,9 +577,15 @@ def query_blockchain():
                        "chain": chain_data,
                        "peers": list(peers)})
 
+@app.route('/get_peers', methods=['GET'])
+def query_peers():
+    return json.dumps({"peers": list(peers)})
+
 # TODO helper function used in register_with_existing_node() only while registering node
 def sync_chain_from_dump(chain_dump):
     # generated_blockchain.create_genesis_block()
+    if DEBUG_MODE:
+        print("sync_chain_from_dump() called")
     for block_data in chain_dump:
         # if idx == 0:
         #     continue  # skip genesis block
@@ -546,9 +596,10 @@ def sync_chain_from_dump(chain_dump):
                       block_data["_nonce"])
         pow_proof = block_data['_block_hash']
         # in add_block, check if pow_proof and previous_hash fileds both are valid
-        added = device.add_block(block, pow_proof)
+        added = device.worker_add_block(block, pow_proof)
         if not added:
             raise Exception("The chain dump is tampered!!")
+            # TODO change a node to sync. If no others, wait
         else:
             # once again a sanity check
             if pow_proof == block.compute_hash():
@@ -561,6 +612,8 @@ def sync_chain_from_dump(chain_dump):
 
 ''' add node to the network '''
 
+# TODO update peers from its miner at every round?
+
 # endpoint to add new peers to the network.
 # why it's using POST here?
 @app.route('/register_node', methods=['POST'])
@@ -568,6 +621,13 @@ def register_new_peers():
     node_address = request.get_json()["registerer_node_address"]
     if not node_address:
         return "Invalid data", 400
+
+    transferred_this_node_address = request.get_json()["registerer_with_node_address"]
+    if device.get_ip_and_port() == None:
+        # this is a dirty hack for the first node in the network to set its ip and node and used to remove itself from peers
+        device.set_ip_and_port(transferred_this_node_address)
+    if device.get_ip_and_port() != transferred_this_node_address:
+        return "This should never happen"
 
     # Add the node to the peer list
     peers.add(node_address)
@@ -583,10 +643,13 @@ def register_with_existing_node():
     Internally calls the `register_node` endpoint to register current node with the node specified in the
     request, and sync the blockchain as well as peer data.
     """
+    # assign ip and port for itself, mainly used to remove itself from peers list
+    device.set_ip_and_port(request.host_url[:-1])
+
     register_with_node_address = request.get_json()["register_with_node_address"]
     if not register_with_node_address:
         return "Invalid request - must specify a register_with_node_address!", 400
-    data = {"registerer_node_address": request.host_url[:-1]}
+    data = {"registerer_node_address": request.host_url[:-1], "registerer_with_node_address": register_with_node_address}
     headers = {'Content-Type': "application/json"}
 
     # Make a request to register with remote node and obtain information
@@ -609,7 +672,12 @@ def register_with_existing_node():
         # update peer list according to the register-with node
         peers.update(response.json()['peers'])
         # remove itself if there is
-        peers.remove(request.host_url[:-1])
+        try:
+            if DEBUG_MODE:
+                print("Self IP and Port", device.get_ip_and_port())
+            peers.remove(device.get_ip_and_port())
+        except:
+            pass
         if DEBUG_MODE:
             print("register_with_existing_node() called, peers", repr(peers))
         return "Registration successful", 200
