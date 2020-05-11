@@ -17,18 +17,24 @@ DEBUG_MODE = True # press any key to continue
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
 class Block:
-    def __init__(self, idx, transactions=None, block_generation_time=None, previous_hash=None, nonce=0):
+    def __init__(self, idx, transactions=None, block_generation_time=None, previous_hash=None, nonce=0, block_hash=None):
         self._idx = idx
         self._transactions = transactions or []
         self._block_generation_time = block_generation_time
         self._previous_hash = previous_hash
         self._nonce = nonce
         # the hash of the current block, calculated by compute_hash
-        self._block_hash = None
+        self._block_hash = block_hash
         
-    # remove time_stamp
-    def compute_hash(self):
-        block_content = json.dumps(self.__dict__, sort_keys=True)
+    # remove time_stamp?
+    def compute_hash(self, hash_previous_block=False):
+        if hash_previous_block:
+            block_content = self.__dict__
+        else:
+            # = self.__dict__ is even a shallow copy...
+            block_content = copy.deepcopy(self.__dict__)
+            block_content['_block_hash'] = None
+        block_content = json.dumps(block_content, sort_keys=True)
         return sha256(block_content.encode()).hexdigest()
 
     def set_hash(self):
@@ -52,8 +58,8 @@ class Block:
         # get the updates from this block
         return self._transactions
     
-    def remove_block_hash_to_verify_pow(self):
-        self._block_hash = None
+    # def remove_block_hash_to_verify_pow(self):
+    #     self._block_hash = None
     
     # setters
     def set_previous_hash(self, hash_to_set):
@@ -252,6 +258,7 @@ class Worker:
                         # send this worker's address to let miner remember to request this worker to download the block later
                         upload['this_worker_address'] = self._ip_and_port
                         miner_upload_endpoint = f"{miner_address}/new_transaction"
+                        #miner_upload_endpoint = "http://127.0.0.1:5001/new_transaction"
                         requests.post(miner_upload_endpoint,
                             data=json.dumps(upload),
                             headers={'Content-type': 'application/json'})
@@ -356,7 +363,7 @@ class Worker:
         last_block = self._blockchain.get_last_block()
         if last_block is not None:
             # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
-            last_block_hash = last_block.compute_hash()
+            last_block_hash = last_block.compute_hash(hash_previous_block=True)
             if block_to_add.get_previous_hash() != last_block_hash:
                 # to be used as condition check later
                 print("called 1")
@@ -391,9 +398,7 @@ class Worker:
         # pdb.set_trace()
         # Why this is None?
         # block_to_check_without_hash = copy.deepcopy(block_to_check).remove_block_hash_to_verify_pow()
-        block_to_check_without_hash = copy.deepcopy(block_to_check)
-        block_to_check_without_hash.remove_block_hash_to_verify_pow()
-        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check_without_hash.compute_hash()
+        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check.compute_hash()
 
     ''' consensus algorithm for the longest chain '''
     
@@ -407,7 +412,7 @@ class Worker:
             pass
         else:
             for block in chain_to_check[1:]:
-                if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash():
+                if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash(hash_previous_block=True):
                     pass
                 else:
                     return False
@@ -477,6 +482,8 @@ def get_worker_epoch():
 # assign tasks based on role
 @app.route('/')
 def runApp():
+    #TODO recheck peer validity and remove offline peers
+
     print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
     device.set_data_dim(DATA_DIM)
     print(f"{PROMPT} Device is setting sample size {SAMPLE_SIZE}")
@@ -538,12 +545,11 @@ def download_block_from_miner():
                       downloaded_block["_transactions"],
                       downloaded_block["_block_generation_time"],
                       downloaded_block["_previous_hash"],
-                      downloaded_block["_nonce"])
-    pow_proof = downloaded_block['_block_hash']
+                      downloaded_block["_nonce"],
+                      downloaded_block['_block_hash'])
+
     added = device.worker_add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
-    print("rebuilt_downloaded_block", rebuilt_downloaded_block.__dict__)
-    print(added)
     if added:
         device.worker_global_update()
         return "Success", 201
@@ -601,9 +607,7 @@ def sync_chain_from_dump(chain_dump):
             raise Exception("The chain dump is tampered!!")
             # TODO change a node to sync. If no others, wait
         else:
-            # once again a sanity check
-            if pow_proof == block.compute_hash():
-                block.set_hash()
+            pass
             # break
     # return generated_blockchain
 
