@@ -354,6 +354,7 @@ class Worker:
         self._global_weight_vector += global_weight_tensor_accumulator
         print('self._global_weight_vector', self._global_weight_vector)
         print("Global Update Done.")
+        print("Press ENTER to continue...")
 
     ''' Common Methods '''
 
@@ -506,7 +507,7 @@ def runApp():
         print(f"Starting epoch {device.get_current_epoch()}...")
         # while registering, chain was synced, if any
         if DEBUG_MODE:
-            cont = input("First worker_local_update. Continue?\n")
+            cont = input("\nStep1. first let worker do local updates. Continue?\n")
         print(f"{PROMPT} Worker is performing Step1 - local update...\n")
         upload = device.worker_local_update()
         # used for debugging
@@ -517,7 +518,7 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            cont = input("Next worker_associate_miner. Continue?\n")
+            cont = input("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner. Continue?\n")
         miner_address = device.worker_associate_miner_with_same_epoch()
         # FOR PRESENTATION
         miner_address = 'http://127.0.0.1:5000'
@@ -525,7 +526,7 @@ def runApp():
         #     print("miner_address", miner_address)
         # while miner_address is not None:
         if miner_address is not None:
-            print(f"{PROMPT} Miner must now enter sleeping to accept worker uploads!!!")
+            # print(f"{PROMPT} Miner must now enter the phase to accept worker uploads!!!")
             print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.\n")
             # worker uploads data to miner
             device.worker_upload_to_miner(upload, miner_address)
@@ -536,7 +537,7 @@ def runApp():
         #     miner_address = device.worker_associate_miner_with_same_epoch()
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
         if DEBUG_MODE:
-            cont = input("Next sleep 180. Continue?\n")
+            cont = input("Now, worker is waiting to download the added block from its associated miners to do global updates...\n")
         # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
         # time.sleep(180)
         if DEBUG_MODE:
