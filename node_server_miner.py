@@ -709,7 +709,7 @@ def display_chain():
         print(block_id_to_print)
         print('=' * len(block_id_to_print))
         block = chain[block_iter]
-        print("_idx", block["_idx"])
+        # print("_idx", block["_idx"])
         for tx_iter in range(len(block["_transactions"])):
             print(f"\nTransaction {tx_iter}\n", block["_transactions"][tx_iter], "\n")
         print("_block_generation_time", block["_block_generation_time"])
