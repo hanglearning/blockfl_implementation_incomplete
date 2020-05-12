@@ -703,7 +703,11 @@ def runApp():
 def display_chain():
     chain = json.loads(query_blockchain())["chain"]
     for block_iter in range(len(chain)):
-        print(f"Block #{block_iter+1}")
+        block_id_to_print = f"Block #{block_iter+1}"
+        print()
+        print('=' * len(block_id_to_print))
+        print(block_id_to_print)
+        print('=' * len(block_id_to_print))
         block = chain[block_iter]
         print("_idx", block["_idx"])
         for tx_iter in range(len(block["_transactions"])):
