@@ -517,10 +517,10 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            cont = input("Next worker_associate_miner_with_same_epoch. Continue?\n")
+            cont = input("Next worker_associate_miner. Continue?\n")
         miner_address = device.worker_associate_miner_with_same_epoch()
         # FOR PRESENTATION
-        miner_address = 'http://127.0.0.1:/5000'
+        miner_address = 'http://127.0.0.1/5000'
         # if DEBUG_MODE:
         #     print("miner_address", miner_address)
         # while miner_address is not None:
