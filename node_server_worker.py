@@ -237,6 +237,8 @@ class Worker:
         else:
             checked = False
             # check if this node is still a miner
+            # FOR PRESENTATION
+            miner_address = miner_address.replace(miner_address[len(miner_address)-1], '0') 
             response = requests.get(f'{miner_address}/get_role')
             if response.status_code == 200:
                 if response.text == 'Miner':
@@ -514,6 +516,8 @@ def runApp():
         if DEBUG_MODE:
             cont = input("Next worker_associate_miner_with_same_epoch. Continue?")
         miner_address = device.worker_associate_miner_with_same_epoch()
+        # FOR PRESENTATION
+        miner_address = 'http://127.0.0.1:/5000'
         if DEBUG_MODE:
             print("miner_address", miner_address)
         # while miner_address is not None:
