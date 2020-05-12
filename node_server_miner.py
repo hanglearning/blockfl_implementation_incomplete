@@ -165,7 +165,7 @@ class Miner:
         self._associated_workers.add(worker_address)
 
     def get_all_current_epoch_workers(self):
-        print("get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
+        # print("get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
         # self._current_epoch_worker_nodes.clear()
         potential_new_peers = set()
         for node in peers:
@@ -188,8 +188,8 @@ class Miner:
             peers.remove(self._ip_and_port)
         except:
             pass
-        if DEBUG_MODE:
-            print("After get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
+        # if DEBUG_MODE:
+            # print("After get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
         
     def get_all_current_epoch_miners(self):
         # self._current_epoch_miner_nodes.clear()
@@ -226,8 +226,8 @@ class Miner:
         self._received_updates_from_miners.clear()
         self._has_added_propogated_block = False
         self._propogated_block_pow = None
-        if DEBUG_MODE:
-            print("clear_all_vars_for_new_epoch() called")
+        # if DEBUG_MODE:
+        #     print("clear_all_vars_for_new_epoch() called")
 
 
     def add_received_updates_from_miners(self, one_miner_updates):
@@ -593,8 +593,8 @@ def runApp():
         #TODO recheck peer validity and remove offline peers
         # hopfully network delay won't cause bug if like the propogated block is added at the moment we clear _has_added_propogated_block to True. Though low odds, still have to think about it
         # if not device.is_propogated_block_added():
-        if DEBUG_MODE:
-            cont = input("First clear all related variables for the new epoch, including all received updates from the last epoch if any and associated workers and miners in order to start a new epoch. Continue?\n")
+        # if DEBUG_MODE:
+        #     cont = input("First clear all related variables for the new epoch, including all received updates from the last epoch if any and associated workers and miners in order to start a new epoch. Continue?\n")
         # clear 5 vars
         device.clear_all_vars_for_new_epoch()
         # else:
@@ -602,8 +602,8 @@ def runApp():
         #     pass
         
         if not device.is_propogated_block_added():
-            if DEBUG_MODE:
-                cont = input("Next get all workers in this epoch. Continue?\n")
+            # if DEBUG_MODE:
+            #     cont = input("Next get all workers in this epoch. Continue?\n")
             # get all workers in this epoch, used in miner_receive_worker_updates()
             device.get_all_current_epoch_workers()
         else:
@@ -612,7 +612,7 @@ def runApp():
         
         if not device.is_propogated_block_added():
             if DEBUG_MODE:
-                cont = input("Next miner_set_wait_time() to wait for workers to upload. Continue?\n")
+                cont = input("First miner waits for workers to upload. Continue?\n")
             # waiting for worker's updates. While miner_set_wait_time() is working, miner_receive_worker_updates will check block size by checking and when #(tx) = #(workers), abort the timer 
             # TODO uncomment in production miner_set_wait_time()
         else:
