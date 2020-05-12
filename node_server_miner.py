@@ -584,13 +584,17 @@ def runApp():
 
     # wait for worker maximum wating time
     while True:
-        print(f"{PROMPT} This is Miner with ID {device.get_idx()}")
-        print(f"Starting epoch {device.get_current_epoch()}...")
+        print(f"==================")
+        print(f"|  BlockFL Demo  |")
+        print(f"==================\n")
+        
+        print(f"{PROMPT} This is Miner with ID {device.get_idx()}\n")
+        print(f"Starting epoch {device.get_current_epoch()}...\n")
         #TODO recheck peer validity and remove offline peers
         # hopfully network delay won't cause bug if like the propogated block is added at the moment we clear _has_added_propogated_block to True. Though low odds, still have to think about it
         # if not device.is_propogated_block_added():
         if DEBUG_MODE:
-            cont = input("First clear all related variables for the new epoch, including all received updates from the last epoch if any and associated workers and miners. Continue?")
+            cont = input("First clear all related variables for the new epoch, including all received updates from the last epoch if any and associated workers and miners in order to start a new epoch. Continue?\n")
         # clear 5 vars
         device.clear_all_vars_for_new_epoch()
         # else:
@@ -599,7 +603,7 @@ def runApp():
         
         if not device.is_propogated_block_added():
             if DEBUG_MODE:
-                cont = input("Next get all workers in this epoch. Continue?")
+                cont = input("Next get all workers in this epoch. Continue?\n")
             # get all workers in this epoch, used in miner_receive_worker_updates()
             device.get_all_current_epoch_workers()
         else:
@@ -608,7 +612,7 @@ def runApp():
         
         if not device.is_propogated_block_added():
             if DEBUG_MODE:
-                cont = input("Next miner_set_wait_time() to wait for workers to upload. Continue?")
+                cont = input("Next miner_set_wait_time() to wait for workers to upload. Continue?\n")
             # waiting for worker's updates. While miner_set_wait_time() is working, miner_receive_worker_updates will check block size by checking and when #(tx) = #(workers), abort the timer 
             # TODO uncomment in production miner_set_wait_time()
         else:
@@ -618,7 +622,7 @@ def runApp():
         if not device.is_propogated_block_added():
             # miner broadcast received local updates
             if DEBUG_MODE:
-                cont = input("Next miner_broadcast_updates(). Continue?")
+                cont = input("Next miner_broadcast_updates(). Continue?\n")
             device.miner_broadcast_updates()
         else:
             print("A propogated block has been added. Jump to request worker download.")
@@ -627,7 +631,7 @@ def runApp():
         if not device.is_propogated_block_added():
             # TODO find a better approach to implement, maybe use thread - wait for 180s to receive updates from other miners. Also need to consider about the block size!!
             if DEBUG_MODE:
-                cont = input("Next time.sleep(180) to receive the propogated updates. Continue?")
+                cont = input("Next time.sleep(180) to receive the propogated updates. Continue?\n")
             # time.sleep(180)
             # start cross-verification
         else:
@@ -637,7 +641,7 @@ def runApp():
         if not device.is_propogated_block_added():
             # TODO verify uploads? How?
             if DEBUG_MODE:
-                cont = input("Next cross_verification. Continue?")
+                cont = input("Next cross_verification. Continue?\n")
             candidate_block = device.cross_verification()
         else:
             print("A propogated block has been added. Jump to request worker download.")
@@ -646,7 +650,7 @@ def runApp():
         if not device.is_propogated_block_added():
             # miner mine transactions by PoW on this candidate_block
             if DEBUG_MODE:
-                cont = input("Next miner_mine_block. Continue?")
+                cont = input("Next miner_mine_block. Continue?\n")
             pow_proof, mined_block = device.miner_mine_block(candidate_block)
         else:
             print("A propogated block has been added. Jump to request worker download.")
@@ -656,7 +660,7 @@ def runApp():
             # block_propagation
             # TODO if miner_mine_block returns none, which means it gets aborted, then it does not run propogate_the_block and add its own block. If not, run the next two.
             if DEBUG_MODE:
-                cont = input("Next miner_propogate_the_block. Continue?")
+                cont = input("Next miner_propogate_the_block. Continue\n?")
             device.miner_propogate_the_block(mined_block, pow_proof)
         else:
             print("A propogated block has been added. Jump to request worker download.")
@@ -666,16 +670,16 @@ def runApp():
             # add its own block
             # TODO fork ACK?
             if DEBUG_MODE:
-                cont = input("Next add_block. Continue?")
+                cont = input("Next add_block. Continue?\n")
             if device.add_block(mined_block, pow_proof):
-                print("Own block has been added.")
+                print("Its own block has been added.")
         else:
             print("A propogated block has been added. Jump to request worker download.")
             pass
 
         # send updates to its associated miners
         if DEBUG_MODE:
-            cont = input("Next request_associated_workers_download. Continue?")
+            cont = input("Next request_associated_workers_download. Continue?\n")
             if device.is_propogated_block_added():
                 # download the added propogated block
                 device.request_associated_workers_download(device.get_propogated_block_pow())
@@ -683,7 +687,7 @@ def runApp():
                 # download its own block
                 device.request_associated_workers_download(pow_proof)
                 if DEBUG_MODE:
-                    cont = input("Next epoch. Continue?")
+                    cont = input("Next epoch. Continue?\n")
 
 
 # endpoint to return the node's copy of the chain.

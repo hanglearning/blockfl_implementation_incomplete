@@ -485,6 +485,9 @@ def get_worker_epoch():
 @app.route('/')
 def runApp():
     #TODO recheck peer validity and remove offline peers
+    print(f"==================")
+    print(f"|  BlockFL Demo  |")
+    print(f"==================\n")
 
     print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
     device.set_data_dim(DATA_DIM)
@@ -494,7 +497,7 @@ def runApp():
     device.worker_set_step_size(STEP_SIZE)
     print(f"{PROMPT} Worker set global_weight_to_all_0s.")
     device.worker_init_global_weihgt()
-    print(f"{PROMPT} Device is generating the dummy data.")
+    print(f"{PROMPT} Device is generating the dummy data.\n")
     device.worker_generate_dummy_data()
 
     # TODO change to < EPSILON
@@ -503,8 +506,8 @@ def runApp():
         print(f"Starting epoch {device.get_current_epoch()}...")
         # while registering, chain was synced, if any
         if DEBUG_MODE:
-            cont = input("Next worker_local_update. Continue?")
-        print(f"{PROMPT} Worker is performing Step1 - local update...")
+            cont = input("First worker_local_update. Continue?\n")
+        print(f"{PROMPT} Worker is performing Step1 - local update...\n")
         upload = device.worker_local_update()
         # used for debugging
         if DEBUG_MODE:
@@ -514,16 +517,16 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            cont = input("Next worker_associate_miner_with_same_epoch. Continue?")
+            cont = input("Next worker_associate_miner_with_same_epoch. Continue?\n")
         miner_address = device.worker_associate_miner_with_same_epoch()
         # FOR PRESENTATION
         miner_address = 'http://127.0.0.1:/5000'
-        if DEBUG_MODE:
-            print("miner_address", miner_address)
+        # if DEBUG_MODE:
+        #     print("miner_address", miner_address)
         # while miner_address is not None:
         if miner_address is not None:
             print(f"{PROMPT} Miner must now enter sleeping to accept worker uploads!!!")
-            print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.")
+            print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.\n")
             # worker uploads data to miner
             device.worker_upload_to_miner(upload, miner_address)
         # else: dealt with after combining two classes
@@ -533,11 +536,11 @@ def runApp():
         #     miner_address = device.worker_associate_miner_with_same_epoch()
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
         if DEBUG_MODE:
-            cont = input("Next sleep 180. Continue?")
+            cont = input("Next sleep 180. Continue?\n")
         # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
         # time.sleep(180)
         if DEBUG_MODE:
-            cont = input("Next epoch. Continue?")
+            cont = input("Next epoch. Continue?\n")
         
 @app.route('/download_block_from_miner', methods=['POST'])
 def download_block_from_miner():
