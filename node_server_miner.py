@@ -686,7 +686,10 @@ def runApp():
             # miner mine transactions by PoW on this candidate_block
             if DEBUG_MODE:
                 cont = input("\nNext miner mines its own block. Continue?\n")
-            pow_proof, mined_block = device.miner_mine_block(candidate_block)
+            if not device.is_propogated_block_added():
+                pow_proof, mined_block = device.miner_mine_block(candidate_block)
+            else:
+                print("NOTE: A propogated block has been added. Jump to request worker download.")
         else:
             print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
