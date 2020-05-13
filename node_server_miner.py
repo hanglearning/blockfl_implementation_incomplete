@@ -746,7 +746,7 @@ def display_chain():
         block = chain[block_iter]
         # print("_idx", block["_idx"])
         for tx_iter in range(len(block["_transactions"])):
-            print(f"\nTransaction {tx_iter}\n", block["_transactions"][tx_iter], "\n")
+            print(f"\nTransaction {tx_iter+1}\n", block["_transactions"][tx_iter], "\n")
         print("_block_generation_time", block["_block_generation_time"])
         print("_previous_hash", block["_previous_hash"])
         print("_nonce", block["_nonce"])
