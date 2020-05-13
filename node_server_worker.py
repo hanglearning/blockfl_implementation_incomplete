@@ -13,6 +13,11 @@ import copy
 import json
 from hashlib import sha256
 
+# https://stackoverflow.com/questions/14888799/disable-console-messages-in-flask-server
+import logging
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 DEBUG_MODE = True # press any key to continue
 
 # reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
@@ -236,9 +241,7 @@ class Worker:
             print("Worker does not accept other workers' updates directly")
         else:
             checked = False
-            # check if this node is still a miner
-            # FOR PRESENTATION
-            miner_address = miner_address.replace(miner_address[len(miner_address)-1], '0') 
+            # check if this node is still a miner 
             response = requests.get(f'{miner_address}/get_role')
             if response.status_code == 200:
                 if response.text == 'Miner':
@@ -289,7 +292,7 @@ class Worker:
             last_block = self._blockchain.get_last_block()
             if last_block is not None:
                 transactions = last_block.get_transactions()
-                ''' transactions = [{'device_id': 'ddf993e5', 'local_weight_update': {'update_tensor_to_list': [[0.0], [0.0], [0.0], [0.0]], 'tensor_type': 'torch.FloatTensor'}, 'global_gradients_per_data_point': [{'update_tensor_to_list': [[-15.794557571411133], [-9.352561950683594], [-90.67684936523438], [-80.69305419921875]], 'tensor_type': 'torch.FloatTensor'}, {'update_tensor_to_list': [[-132.57232666015625], [-284.4437561035156], [-53.215885162353516], [-13.190389633178711]], 'tensor_type': 'torch.FloatTensor'}, {'update_tensor_to_list': [[-35.0189094543457], [-6.117635250091553], [-23.661569595336914], [-3.7096316814422607]], 'tensor_type': 'torch.FloatTensor'}], 'computation_time': 0.16167688369750977, 'this_worker_address': 'http://localhost:5001', 'tx_received_time': 1587539183.5140128}] '''
+                ''' transactions = [{'worker_id': 'ddf993e5', 'local_weight_update': {'update_tensor_to_list': [[0.0], [0.0], [0.0], [0.0]], 'tensor_type': 'torch.FloatTensor'}, 'global_gradients_per_data_point': [{'update_tensor_to_list': [[-15.794557571411133], [-9.352561950683594], [-90.67684936523438], [-80.69305419921875]], 'tensor_type': 'torch.FloatTensor'}, {'update_tensor_to_list': [[-132.57232666015625], [-284.4437561035156], [-53.215885162353516], [-13.190389633178711]], 'tensor_type': 'torch.FloatTensor'}, {'update_tensor_to_list': [[-35.0189094543457], [-6.117635250091553], [-23.661569595336914], [-3.7096316814422607]], 'tensor_type': 'torch.FloatTensor'}], 'computation_time': 0.16167688369750977, 'this_worker_address': 'http://localhost:5001', 'tx_received_time': 1587539183.5140128}] '''
                 tensor_accumulator = torch.zeros_like(self._global_weight_vector)
                 for update_per_device in transactions:
                     for data_point_gradient in update_per_device['global_gradients_per_data_point']:
@@ -328,12 +331,12 @@ class Worker:
                 # calculate local update
                 local_weight = local_weight - (self._step_size/len(self._data)) * (delta_fk_wil - delta_fk_wl + delta_f_wl)
 
-            # device_id is not required. Just for debugging purpose
-            return {"device_id": self._idx, "local_weight_update": {"update_tensor_to_list": local_weight.tolist(), "tensor_type": local_weight.type()}, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
+            # worker_id and worker_ip is not required to be recorded to the block. Just for debugging purpose
+            return {"worker_id": self._idx, "worker_ip": self._ip_and_port, "local_weight_update": {"update_tensor_to_list": local_weight.tolist(), "tensor_type": local_weight.type()}, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
 
     # TODO
     def worker_global_update(self):
-        print("worker_global_update() called")
+        print("This worker is performing global updates...")
         #TODO rebuild tensors
         transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
         print("transactions_in_downloaded_block", transactions_in_downloaded_block)
@@ -354,7 +357,7 @@ class Worker:
         self._global_weight_vector += global_weight_tensor_accumulator
         print('self._global_weight_vector', self._global_weight_vector)
         print("Global Update Done.")
-        print("Press ENTER to continue...")
+        print("Press ENTER to continue to the next epoch...")
 
     ''' Common Methods '''
 
@@ -486,9 +489,11 @@ def get_worker_epoch():
 @app.route('/')
 def runApp():
     #TODO recheck peer validity and remove offline peers
-    print(f"==================")
+    print(f"\n==================")
     print(f"|  BlockFL Demo  |")
     print(f"==================\n")
+    if DEBUG_MODE:
+        print("System running in sequential mode...\n")
 
     print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
     device.set_data_dim(DATA_DIM)
@@ -499,12 +504,13 @@ def runApp():
     print(f"{PROMPT} Worker set global_weight_to_all_0s.")
     device.worker_init_global_weihgt()
     print(f"{PROMPT} Device is generating the dummy data.\n")
+    print(f"Dummy data generated.")
     device.worker_generate_dummy_data()
 
     # TODO change to < EPSILON
     while True:
+        print(f"\nStarting epoch {device.get_current_epoch()}...\n")
         print(f"{PROMPT} This is workder with ID {device.get_idx()}")
-        print(f"Starting epoch {device.get_current_epoch()}...")
         # while registering, chain was synced, if any
         if DEBUG_MODE:
             cont = input("\nStep1. first let worker do local updates. Continue?\n")
@@ -527,7 +533,7 @@ def runApp():
         # while miner_address is not None:
         if miner_address is not None:
             # print(f"{PROMPT} Miner must now enter the phase to accept worker uploads!!!")
-            print(f"{PROMPT} This workder {device.get_idx()} now assigned to miner with address {miner_address}.\n")
+            print(f"{PROMPT} This workder {device.get_ip_and_port()}({device.get_idx()}) now assigned to miner with address {miner_address}.\n")
             # worker uploads data to miner
             device.worker_upload_to_miner(upload, miner_address)
         # else: dealt with after combining two classes
@@ -540,12 +546,12 @@ def runApp():
             cont = input("Now, worker is waiting to download the added block from its associated miners to do global updates...\n")
         # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
         # time.sleep(180)
-        if DEBUG_MODE:
-            cont = input("Next epoch. Continue?\n")
+        # if DEBUG_MODE:
+        #     cont = input("Next epoch. Continue?\n")
         
 @app.route('/download_block_from_miner', methods=['POST'])
 def download_block_from_miner():
-    print("download_block_from_miner() called")
+    print(f"\nReceived downloaded block with the associated miner {request.get_json()['miner_ip']}({request.get_json()['miner_id']})")
     downloaded_block = request.get_json()["block_to_download"]
     pow_proof = request.get_json()["pow_proof"]
     # rebuild the block
@@ -569,17 +575,22 @@ def download_block_from_miner():
 @app.route('/chain', methods=['GET'])
 def display_chain():
     chain = json.loads(query_blockchain())["chain"]
+    print("\nChain info requested and returned -")
     for block_iter in range(len(chain)):
-        print(f"Block #{block_iter+1}")
+        block_id_to_print = f"Block #{block_iter+1}"
+        print()
+        print('=' * len(block_id_to_print))
+        print(block_id_to_print)
+        print('=' * len(block_id_to_print))
         block = chain[block_iter]
-        print("_idx", block["_idx"])
+        # print("_idx", block["_idx"])
         for tx_iter in range(len(block["_transactions"])):
             print(f"\nTransaction {tx_iter}\n", block["_transactions"][tx_iter], "\n")
         print("_block_generation_time", block["_block_generation_time"])
         print("_previous_hash", block["_previous_hash"])
         print("_nonce", block["_nonce"])
         print("_block_hash", block["_block_hash"])
-    return "Chain Returned"
+    return "Chain Returned in Port Console"
 
 
 @app.route('/get_chain_meta', methods=['GET'])
@@ -598,8 +609,8 @@ def query_peers():
 # TODO helper function used in register_with_existing_node() only while registering node
 def sync_chain_from_dump(chain_dump):
     # generated_blockchain.create_genesis_block()
-    if DEBUG_MODE:
-        print("sync_chain_from_dump() called")
+    # if DEBUG_MODE:
+    #     print("sync_chain_from_dump() called")
     for block_data in chain_dump:
         # if idx == 0:
         #     continue  # skip genesis block

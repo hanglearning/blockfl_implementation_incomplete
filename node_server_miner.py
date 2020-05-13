@@ -12,6 +12,12 @@ import copy
 
 import json
 from hashlib import sha256
+
+# https://stackoverflow.com/questions/14888799/disable-console-messages-in-flask-server
+import logging
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 DEBUG_MODE = True # press any key to continue
 
 
@@ -236,7 +242,7 @@ class Miner:
     def request_associated_workers_download(self, pow_proof):
         block_to_download = self._blockchain.get_last_block()
         # pdb.set_trace()
-        data = {"block_to_download": block_to_download.__dict__, "pow_proof": pow_proof}
+        data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "block_to_download": block_to_download.__dict__, "pow_proof": pow_proof}
         headers = {'Content-Type': "application/json"}
         if self._associated_workers:
             for worker in self._associated_workers:
@@ -267,26 +273,36 @@ class Miner:
         #     print("id of candidate_block", id(candidate_block))
         #     print("self._received_transactions", self._received_transactions)
         if self._received_transactions:
+            print("\nVerifying received updates from associated workers...")
             for update in self._received_transactions:
                 if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
                     candidate_block.add_verified_transaction(update)
+                    print(f"Updates from worker {update['worker_ip']}({update['worker_id']}) are verified.")
                 else:
                     print("Error cross-verification SELF")
+                    #TODO toss this updates
                 self.get_rewards(DATA_DIM)
-        print("After self-verification, rewards ", self._rewards)
+        else:
+            print("\nNo associated workers or no updates received from the associated workers. Skipping self verification...")
+        print("After/Skip self verification, total rewards ", self._rewards)
         # cross-verification
         if self._received_updates_from_miners:
             for update_from_other_miner in self._received_updates_from_miners:
+                print("\nVerifying broadcasted updates from other miners...")
                 # pdb.set_trace()
                 for update in update_from_other_miner['received_updates']:
                     if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
                         candidate_block.add_verified_transaction(update)
+                        print(f"Updates from miner {update_from_other_miner['from_miner_ip']}({update_from_other_miner['from_miner_id']}) for worker {update['worker_ip']}({update['worker_id']}) are verified.")
                     else:
                         print("Error cross-verification OTHER MINER")
+                        #TODO toss this updates
                     self.get_rewards(DATA_DIM)
-        if DEBUG_MODE:
-            print("Rewards after cross_verification ", self._rewards)
-            # print("candidate_block", candidate_block)
+        else:
+            print("\nNo broadcasted updates received from other miners. Skipping cross verification.")
+        print("After/Skip cross verification, total rewards ", self._rewards)
+        print("\nCross verifications done")
+        # print("candidate_block", candidate_block)
 
         # when timer ends
         return candidate_block
@@ -307,6 +323,7 @@ class Miner:
             candidate_block.set_hash()
             if DEBUG_MODE:
                 print(f"After PoW, block nonce is {candidate_block._nonce} and block hash is {candidate_block._block_hash}.")
+                print("This block will only be added to this miner's chain if this miner has not\n 1. received a propogated block, and\n 2. successfully verified the PoW proof of the propogated block.\nThis block would be dumped if both above conditions are met.")
             return current_hash, candidate_block
         else:
             print('Worker does not perform PoW.')
@@ -316,7 +333,7 @@ class Miner:
             # if DEBUG_MODE:
             #     print("self._received_transactions", self._received_transactions)
             self._received_transactions.append(transaction)
-            print(f"Miner {self.get_idx()} received updates from {transaction['device_id']}")
+            print(f"\nThis miner {self.get_ip_and_port()}({self._idx}) received updates from worker {transaction['this_worker_address']}({transaction['worker_id']})")
             # check block size
             if len(self._current_epoch_worker_nodes) == len(self._received_transactions):
                 # TODO abort the timer in miner_set_wait_time()
@@ -330,14 +347,14 @@ class Miner:
         # get all miners in this epoch
         self.get_all_current_epoch_miners()
 
-        data = {"miner_id": self._idx, "received_updates": self._received_transactions}
+        data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "received_updates": self._received_transactions}
         headers = {'Content-Type': "application/json"}
 
         # broadcast the updates
         for miner in self._current_epoch_miner_nodes:
             response = requests.post(miner + "/receive_updates_from_miner", data=json.dumps(data), headers=headers)
             if response.status_code == 200:
-                print(f'Miner {self._idx} sent unconfirmed updates to miner {miner}')
+                print(f'This miner {self._ip_and_port}({self._idx}) has sent unverified updates to miner {miner}')
                 print('Press ENTER to continue...')
         return "ok"
 
@@ -345,19 +362,20 @@ class Miner:
         # refresh the miner nodes in case there's any gone offline
         device.get_all_current_epoch_miners()
 
-        data = {"miner_id": self._idx, "propogated_block": block_to_propogate.__dict__, "pow_proof": pow_proof}
+        data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "propogated_block": block_to_propogate.__dict__, "pow_proof": pow_proof}
         headers = {'Content-Type': "application/json"}
 
         for miner in self._current_epoch_miner_nodes:
             # Make a request to register with remote node and obtain information
             response = requests.post(miner + "/receive_propogated_block", data=json.dumps(data), headers=headers)
             if response.status_code == 200:
-                print(f'Miner {self._idx} sent the propogated block to miner {miner}')
+                print(f'This miner {self.get_ip_and_port()}({self._idx}) has sent the propogated block to miner {miner}')
                 print('Press ENTER to continue...')
 
     # TODO THIS FUNCTION MUST ABORT IF RECEIVED A BLOCK FROM ANOTHER MINER!!!
     def miner_mine_block(self, block_to_mine):
         if self._is_miner:
+            print("Mining the block...")
             if block_to_mine.get_transactions():
                 # TODO
                 # get the last block and add previous hash
@@ -372,8 +390,8 @@ class Miner:
                 pow_proof, mined_block = self.proof_of_work(block_to_mine)
                 # propagate the block in main()
                 # pdb.set_trace()
-                if DEBUG_MODE:
-                    print(f"miner_mine_block() called, with pow_proof {pow_proof}")
+                # if DEBUG_MODE:
+                #     print(f"miner_mine_block() called, with pow_proof {pow_proof}")
                 return pow_proof, mined_block
             else:
                 print("No transaction to mine.")
@@ -527,7 +545,7 @@ def within_miner_wait_time():
 def new_transaction():
     if miner_accept_updates:
         update_data = request.get_json()
-        required_fields = ["device_id", "local_weight_update", "global_gradients_per_data_point", "computation_time", "this_worker_address"]
+        required_fields = ["worker_id", "worker_ip", "local_weight_update", "global_gradients_per_data_point", "computation_time", "this_worker_address"]
 
         for field in required_fields:
             if not update_data.get(field):
@@ -537,20 +555,24 @@ def new_transaction():
         update_data["tx_received_time"] = time.time()
         device.miner_receive_worker_updates(update_data)
         if DEBUG_MODE:
-            print("This miner received updates: ", update_data)
-            print("Press ENTER to continue...\n")
+            print("The received updates: ", update_data)
+            print("Press ENTER to continue...")
     return "Success", 201
 
 @app.route('/receive_updates_from_miner', methods=['POST'])
 def receive_updates_from_miner():
-    miner_id = request.get_json()["miner_id"]
+    sender_miner_id = request.get_json()["miner_id"]
+    sender_miner_ip = request.get_json()["miner_ip"]
     with_updates = request.get_json()["received_updates"]
-    one_miner_updates = {"from_miner": miner_id, "received_updates": with_updates}
-    device.add_received_updates_from_miners(one_miner_updates)
-    print(f"Received updates from miner {miner_id}.\n")
-    print(with_updates, '\n')
-    print("Press ENTER to continue...\n")
-    return "Success", 201
+    one_miner_updates = {"from_miner_ip": sender_miner_ip, "from_miner_id": sender_miner_id, "received_updates": with_updates}
+    print(f"\nReceived unverified updates from miner {sender_miner_ip}({sender_miner_id}).\n")
+    if with_updates:
+        device.add_received_updates_from_miners(one_miner_updates)
+        print(f"The received broadcasted updates {with_updates}\n")
+    else:
+        print(f"The received broadcasted updates is empty, which is then tossed.\n")
+    print("Press ENTER to continue...")
+    return "Success", 200
     
 @app.route('/receive_propogated_block', methods=['POST'])
 def receive_propogated_block():
@@ -558,7 +580,8 @@ def receive_propogated_block():
     if device.is_propogated_block_added():
         # TODO in paper it has fork is generated when miner receives a new block, but I think this should be generated when a received propogated block has been added to the chain
         return "A fork has happened."
-    miner_id = request.get_json()["miner_id"]
+    sender_miner_id = request.get_json()["miner_id"]
+    sender_miner_ip = request.get_json()["miner_ip"]
     pow_proof = request.get_json()["pow_proof"]
     propogated_block = request.get_json()["propogated_block"]
     # first verify this block id == chain length
@@ -574,12 +597,16 @@ def receive_propogated_block():
                 propogated_block["_previous_hash"],
                 propogated_block["_nonce"],
                 propogated_block['_block_hash'])
-    print("reconstructed_block", reconstructed_block.__dict__, "pow", pow_proof)
+    print(f"\nReceived a propogated block from {sender_miner_ip}({sender_miner_id})")
+    print(reconstructed_block.__dict__, "\nWith PoW", pow_proof)
     # TODO Still verify dimension or not since this miner may not fully trust the other miner? If not verify, what's the reason?
     if device.add_block(reconstructed_block, pow_proof):
         device.set_propogated_block_pow(pow_proof)
         device.propogated_block_has_been_added()
-        print("A propogated block has been mined and added to the blockchain.")
+        note_text = "NOTE: A propogated block has been received, verified and added to the this miner's blockchain."
+        print('=' * len(note_text))
+        print(note_text)
+        print('=' * len(note_text))
         print("Press ENTER to continue...")
         return "A propogated block has been mined and added to the blockchain."
 
@@ -588,15 +615,16 @@ def receive_propogated_block():
 # assign tasks based on role
 @app.route('/')
 def runApp():
-
+    
+    print(f"\n==================")
+    print(f"|  BlockFL Demo  |")
+    print(f"==================\n")
+    if DEBUG_MODE:
+        print("System running in sequential mode...\n")
     # wait for worker maximum wating time
-    while True:
-        print(f"==================")
-        print(f"|  BlockFL Demo  |")
-        print(f"==================\n")
-        
-        print(f"{PROMPT} This is Miner with ID {device.get_idx()}\n")
+    while True: 
         print(f"Starting epoch {device.get_current_epoch()}...\n")
+        print(f"{PROMPT} This is Miner with ID {device.get_idx()}\n")
         #TODO recheck peer validity and remove offline peers
         # hopfully network delay won't cause bug if like the propogated block is added at the moment we clear _has_added_propogated_block to True. Though low odds, still have to think about it
         # if not device.is_propogated_block_added():
@@ -605,7 +633,7 @@ def runApp():
         # clear 5 vars
         device.clear_all_vars_for_new_epoch()
         # else:
-        #     print("A propogated block has been added. Jump to request worker download.")
+        #     print("NOTE: A propogated block has been added. Jump to request worker download.")
         #     pass
         
         if not device.is_propogated_block_added():
@@ -614,16 +642,16 @@ def runApp():
             # get all workers in this epoch, used in miner_receive_worker_updates()
             device.get_all_current_epoch_workers()
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
         
         if not device.is_propogated_block_added():
             if DEBUG_MODE:
-                cont = input("Miner is waiting for workers to upload their updates now...\nPress ENTER to continue to the next step if no updates uploaded to this miner...\n")
+                cont = input("Miner is waiting for workers to upload their updates now...\nPress ENTER to continue to the next step if no updates uploaded to this miner to receive the broadcasted updates...\n")
             # waiting for worker's updates. While miner_set_wait_time() is working, miner_receive_worker_updates will check block size by checking and when #(tx) = #(workers), abort the timer 
             # TODO uncomment in production miner_set_wait_time()
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
         
         if not device.is_propogated_block_added():
@@ -632,7 +660,7 @@ def runApp():
                 cont = input("Next, miners broadcast its received updates to other miners, and in the same time accept the broadcasted updates from other miners as well. Continue?\n")
             device.miner_broadcast_updates()
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
 
         # if not device.is_propogated_block_added():
@@ -642,25 +670,25 @@ def runApp():
         #     # time.sleep(180)
         #     # start cross-verification
         # else:
-        #     print("A propogated block has been added. Jump to request worker download.")
+        #     print("NOTE: A propogated block has been added. Jump to request worker download.")
         #     pass
 
         if not device.is_propogated_block_added():
             # TODO verify uploads? How?
             if DEBUG_MODE:
-                cont = input("Next cross_verification. Continue?\n")
+                cont = input("\nNext self and cross verification. Continue?\n")
             candidate_block = device.cross_verification()
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
 
         if not device.is_propogated_block_added():
             # miner mine transactions by PoW on this candidate_block
             if DEBUG_MODE:
-                cont = input("\nNext miner_mine_block. Continue?\n")
+                cont = input("\nNext miner mines its own block. Continue?\n")
             pow_proof, mined_block = device.miner_mine_block(candidate_block)
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
         
         if not device.is_propogated_block_added():
@@ -668,9 +696,12 @@ def runApp():
             # TODO if miner_mine_block returns none, which means it gets aborted, then it does not run propogate_the_block and add its own block. If not, run the next two.
             if DEBUG_MODE:
                 cont = input("\nNext miner_propogate_the_block. Continue?\n")
-            device.miner_propogate_the_block(mined_block, pow_proof)
+            if not device.is_propogated_block_added():
+                device.miner_propogate_the_block(mined_block, pow_proof)
+            else:
+                print("NOTE: A propogated block has been added. Jump to request worker download.")
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
 
         if not device.is_propogated_block_added():
@@ -681,7 +712,7 @@ def runApp():
             if device.add_block(mined_block, pow_proof):
                 print("Its own block has been added.")
         else:
-            print("A propogated block has been added. Jump to request worker download.")
+            print("NOTE: A propogated block has been added. Jump to request worker download.")
             pass
 
         # send updates to its associated miners
@@ -693,8 +724,8 @@ def runApp():
             else:
                 # download its own block
                 device.request_associated_workers_download(pow_proof)
-                if DEBUG_MODE:
-                    cont = input("Next epoch. Continue?\n")
+            if DEBUG_MODE:
+                cont = input("Next epoch. Continue?\n")
 
 
 # endpoint to return the node's copy of the chain.
@@ -702,6 +733,7 @@ def runApp():
 @app.route('/chain', methods=['GET'])
 def display_chain():
     chain = json.loads(query_blockchain())["chain"]
+    print("\nChain info requested and returned -")
     for block_iter in range(len(chain)):
         block_id_to_print = f"Block #{block_iter+1}"
         print()
