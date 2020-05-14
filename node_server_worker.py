@@ -117,6 +117,7 @@ class Worker:
         self._data_dim = None
         # sample size(Ni)
         self._sample_size = None
+        self._rewards = 0
 
     ''' getters '''
     # get device id
@@ -142,6 +143,9 @@ class Worker:
 
     ''' setters '''
     # set data dimension
+    def get_rewards(self, rewards):
+        self._rewards += rewards
+
     def set_data_dim(self, data_dim):
         self._data_dim = data_dim
 
@@ -272,7 +276,11 @@ class Worker:
                         return "Not within miner waiting time."
                 else:
                     return "Error getting miner waiting status", response_miner_accepting.status_code
-            
+    
+    def worker_receive_rewards_from_miner(self, rewards):
+        print(f"Before rewarded, this worder has rewards {self._rewards}.")
+        self.get_rewards(rewards)
+        print(f"After rewarded, this worder has rewards {self._rewards}.\n")
             
 
     # BlockFL step 1 - train with regression
@@ -494,7 +502,7 @@ def runApp():
     print(f"==================\n")
     if DEBUG_MODE:
         print("System running in sequential mode...\n")
-
+    
     print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
     device.set_data_dim(DATA_DIM)
     print(f"{PROMPT} Device is setting sample size {SAMPLE_SIZE}")
@@ -548,10 +556,18 @@ def runApp():
         # time.sleep(180)
         # if DEBUG_MODE:
         #     cont = input("Next epoch. Continue?\n")
+
+@app.route('/get_rewards_from_miner', methods=['POST'])
+def get_rewards_from_miner():
+    received_rewards = request.get_json()['rewards']
+    print(f"\nThis worker received self verification rewards {received_rewards} from the associated miner {request.get_json()['miner_ip']}({request.get_json()['miner_id']})")
+    device.worker_receive_rewards_from_miner(received_rewards)
+    return "Success", 200
+
         
 @app.route('/download_block_from_miner', methods=['POST'])
 def download_block_from_miner():
-    print(f"\nReceived downloaded block with the associated miner {request.get_json()['miner_ip']}({request.get_json()['miner_id']})")
+    print(f"\nReceived downloaded block from the associated miner {request.get_json()['miner_ip']}({request.get_json()['miner_id']})")
     downloaded_block = request.get_json()["block_to_download"]
     pow_proof = request.get_json()["pow_proof"]
     # rebuild the block

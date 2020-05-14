@@ -272,12 +272,19 @@ class Miner:
         #         print(id(block))
         #     print("id of candidate_block", id(candidate_block))
         #     print("self._received_transactions", self._received_transactions)
+        # TODO make it more robust
         if self._received_transactions:
             print("\nVerifying received updates from associated workers...")
             for update in self._received_transactions:
-                if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
+                if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM and len(update['global_gradients_per_data_point']) == SAMPLE_SIZE:
                     candidate_block.add_verified_transaction(update)
                     print(f"Updates from worker {update['worker_ip']}({update['worker_id']}) are verified.")
+                    print(f"This miner now sends rewards to the above worker for the provision of data by the SAMPLE_SIZE {SAMPLE_SIZE}")
+                    data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "rewards": SAMPLE_SIZE}
+                    headers = {'Content-Type': "application/json"}
+                    response = requests.post(f"{update['worker_ip']}/get_rewards_from_miner", data=json.dumps(data), headers=headers)
+                    if response.status_code == 200:
+                        print(f'Rewards sent!\n')
                 else:
                     print("Error cross-verification SELF")
                     #TODO toss this updates
@@ -291,7 +298,7 @@ class Miner:
                 print("\nVerifying broadcasted updates from other miners...")
                 # pdb.set_trace()
                 for update in update_from_other_miner['received_updates']:
-                    if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM:
+                    if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM and len(update['global_gradients_per_data_point']) == SAMPLE_SIZE:
                         candidate_block.add_verified_transaction(update)
                         print(f"Updates from miner {update_from_other_miner['from_miner_ip']}({update_from_other_miner['from_miner_id']}) for worker {update['worker_ip']}({update['worker_id']}) are verified.")
                     else:
@@ -620,7 +627,8 @@ def runApp():
     print(f"|  BlockFL Demo  |")
     print(f"==================\n")
     if DEBUG_MODE:
-        print("System running in sequential mode...\n")
+        print("System running in sequential mode...")
+        print(f"Current PoW Difficulty: {Blockchain.difficulty}\n")
     # wait for worker maximum wating time
     while True: 
         print(f"Starting epoch {device.get_current_epoch()}...\n")
