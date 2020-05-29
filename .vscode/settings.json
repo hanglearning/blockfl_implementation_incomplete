@@ -1,3 +1,4 @@
 {
-	"editor.detectIndentation": false
+    "editor.detectIndentation": false,
+    "python.pythonPath": "/Users/chenhang91/.pyenv/versions/anaconda3-5.3.0/envs/blockchain/bin/python"
 }

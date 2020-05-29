@@ -186,10 +186,18 @@ class Worker:
 
         # if using torch.randit to generate x and y, calculating gradient will give Long tensor error, so https://discuss.pytorch.org/t/generating-random-tensors-according-to-the-uniform-distribution-pytorch/53030
         # define range
-        r1, r2 = 0, 20
+        # self._sample_size = random.randint(5, 10)
+        self._sample_size = 2
+        r1, r2 = 0, 2
         if not self._data:
+            self.expected_w = torch.tensor([[3.0], [7.0], [12.0]])
             for _ in range(self._sample_size):
-                self._data.append({'x': (r1 - r2) * torch.rand(self._data_dim, 1) + r2, 'y': (r1 - r2) * torch.rand(1, 1) + r2})
+                x_tensor = (r1 - r2) * torch.rand(self._data_dim, 1) + r2
+                y_tensor = self.expected_w.t()@x_tensor
+                self._data.append({'x': x_tensor, 'y': y_tensor})
+            # expected w = 1, 2
+            # self._data.append({'x': torch.tensor([[1.0],[2.0]]), 'y': torch.tensor([5.])})
+            # self._data.append({'x': torch.tensor([[3.0],[4.0]]), 'y': torch.tensor([11.])})
             if DEBUG_MODE:
                 print(self._data)
         else:
@@ -223,6 +231,7 @@ class Worker:
                             if int(response2.text) == self.get_current_epoch():
                                 miner_nodes.add(node)
                                 # side action - update (worker) peers from all miners
+                                #TODO, actually, though worker peer, may also update its peer list
                                 response3 = requests.get(f'{node}/get_peers')
                                 if response3.status_code == 200:
                                     potential_new_peers.update(response3.json()['peers'])
@@ -278,15 +287,35 @@ class Worker:
                     return "Error getting miner waiting status", response_miner_accepting.status_code
     
     def worker_receive_rewards_from_miner(self, rewards):
-        print(f"Before rewarded, this worder has rewards {self._rewards}.")
+        print(f"Before rewarded, this worker has rewards {self._rewards}.")
         self.get_rewards(rewards)
-        print(f"After rewarded, this worder has rewards {self._rewards}.\n")
-            
+        print(f"After rewarded, this worker has rewards {self._rewards}.\n")
+
+    def worker_local_update_linear_regresssion(self):
+        if self._is_miner:
+            print("Miner does not perfrom gradient calculations.")
+        else:
+            start_time = time.time()
+            # local_weight = self._global_weight_vector
+            # last_block = self._blockchain.get_last_block()
+            # https://d18ky98rnyall9.cloudfront.net/_7532aa933df0e5055d163b77102ff2fb_Lecture4.pdf?Expires=1590451200&Signature=QX0rGKTvN6Wc1OgL~M5d23cibJF0fQ7jMWG5dSO3ooaKfYH~Yl4UadTvLQn2KFdUqAMwUaMwKl3kFG65f4w~R62xyumryaHTRDO7K8f5c8kM7v62OYDr0xDvuJ8K3B-Rjr6XbmnCx6tOo6Fi-sAm-fXbWz2cfJVrm6a2jaJU1BI_&Key-Pair-Id=APKAJLTNE6QMUY6HBC5A page 8
+            # part of the gradient decent formular after alpha*(1/m)
+            feature_gradients_tensor = torch.zeros(self._data_dim, 1)
+            for data_point in self._data:
+                difference_btw_hypothesis_and_true_label = data_point['x'].t()@self._global_weight_vector - data_point['y']
+                # for feature_value_iter in range(self._data_dim):
+                #     feature_gradients_tensor[feature_value_iter] += (difference_btw_hypothesis_and_true_label * data_point['x'][feature_value_iter]).squeeze(0)
+                feature_gradients_tensor += difference_btw_hypothesis_and_true_label * data_point['x']
+            feature_gradients_tensor /= len(self._data)
+        
+        print(f"Current global_weights: {self._global_weight_vector}")
+        print(f"Abs difference from expected weights({self.expected_w}): {abs(self.expected_w - self._global_weight_vector)}")
+        return {"worker_id": self._idx, "worker_ip": self._ip_and_port, "feature_gradients": {"feature_gradients_list": feature_gradients_tensor.tolist(), "tensor_type": feature_gradients_tensor.type()}, "computation_time": time.time() - start_time}
 
     # BlockFL step 1 - train with regression
     # return local computation time, and delta_fk(wl) as a list
     # global_gradient is calculated after updating the global_weights
-    def worker_local_update(self):
+    def worker_local_update_SVRG(self):
         if self._is_miner:
             print("Miner does not perfrom gradient calculations.")
         else:
@@ -297,6 +326,7 @@ class Worker:
             # initialize the local weights as the current global weights
             local_weight = self._global_weight_vector
             # calculate delta_f(wl)
+            # pdb.set_trace()
             last_block = self._blockchain.get_last_block()
             if last_block is not None:
                 transactions = last_block.get_transactions()
@@ -311,8 +341,14 @@ class Worker:
                 num_of_device_updates = len(transactions)
                 delta_f_wl = tensor_accumulator/(num_of_device_updates * self._sample_size)
             else:
-                # chain is empty now as this is the first epoch. To keep it consistent, we set delta_f_wl as 0 tensors
+                # chain is empty now as this is the first epoch. Use its own data sample to accumulate this value
                 delta_f_wl = torch.zeros_like(self._global_weight_vector)
+                for data_point in self._data:
+                    local_weight_track_grad = local_weight.clone().detach().requires_grad_(True)
+                    fk_wl = (data_point['x'].t()@local_weight_track_grad - data_point['y'])**2/2
+                    fk_wl.backward()
+                    delta_f_wl += local_weight_track_grad.grad
+                delta_f_wl /= self._sample_size
             # ref - https://stackoverflow.com/questions/3620943/measuring-elapsed-time-with-the-time-module
             start_time = time.time()
             # iterations = the number of data points in a device
@@ -335,17 +371,49 @@ class Worker:
                 # record this value to upload
                 # need to convert delta_fk_wl tensor to list in order to make json.dumps() work
                 global_gradients_per_data_point.append({"update_tensor_to_list": delta_fk_wl.tolist(), "tensor_type": delta_fk_wl.type()})
-                # pdb.set_trace()
                 # calculate local update
                 local_weight = local_weight - (self._step_size/len(self._data)) * (delta_fk_wil - delta_fk_wl + delta_f_wl)
 
             # worker_id and worker_ip is not required to be recorded to the block. Just for debugging purpose
             return {"worker_id": self._idx, "worker_ip": self._ip_and_port, "local_weight_update": {"update_tensor_to_list": local_weight.tolist(), "tensor_type": local_weight.type()}, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
 
-    # TODO
-    def worker_global_update(self):
+    def worker_global_update_linear_regression(self):
         print("This worker is performing global updates...")
-        #TODO rebuild tensors
+        # alpha
+        learning_rate = 0.1
+        transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
+        print("transactions_in_downloaded_block", transactions_in_downloaded_block)
+        feature_gradients_tensor_accumulator = torch.zeros_like(self._global_weight_vector)
+        num_of_device_updates = 0
+        for update in transactions_in_downloaded_block:
+            num_of_device_updates += 1
+            feature_gradients_list = update["feature_gradients"]["feature_gradients_list"]
+            feature_gradients_tensor_type = update["feature_gradients"]["tensor_type"]
+            feature_gradients_tensor = getattr(torch, feature_gradients_tensor_type[6:])(feature_gradients_list)
+            feature_gradients_tensor_accumulator += feature_gradients_tensor
+        # perform global updates by gradient decent
+        self._global_weight_vector -= learning_rate * feature_gradients_tensor_accumulator/num_of_device_updates
+        print('updated self._global_weight_vector', self._global_weight_vector)
+        print('abs difference from expected weights', abs(self._global_weight_vector - self.expected_w))
+
+        with open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/updated_weights_{self._idx}.txt', "a") as myfile:
+            myfile.write(str(self._global_weight_vector)+'\n')
+        with open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/weights_diff_{self._idx}.txt', "a") as myfile:
+            myfile.write(str(abs(self._global_weight_vector - self.expected_w))+'\n')
+
+        print()
+        for data_point_iter in range(len(self._data)):
+            data_point = self._data[data_point_iter]
+            print(f"For datapoint {data_point_iter}, abs difference from true label: {abs(self._global_weight_vector.t()@data_point['x']-data_point['y'])}")
+            with open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/prediction_diff_point_{self._idx}_{data_point_iter+1}.txt', "a") as myfile:
+                myfile.write(str(abs(self._global_weight_vector.t()@data_point['x']-data_point['y']))+'\n')
+        print("====================")
+        print("Global Update Done.")
+        print("Press ENTER to continue to the next epoch...")
+
+    # TODO
+    def worker_global_update_SVRG(self):
+        print("This worker is performing global updates...")
         transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
         print("transactions_in_downloaded_block", transactions_in_downloaded_block)
         Ni = SAMPLE_SIZE
@@ -380,24 +448,22 @@ class Worker:
             last_block_hash = last_block.compute_hash(hash_previous_block=True)
             if block_to_add.get_previous_hash() != last_block_hash:
                 # to be used as condition check later
-                print("called 1")
-                print("block_to_add.get_previous_hash()", block_to_add.get_previous_hash())
-                print("last_block_hash", last_block_hash)
                 return False
             # 2. check if the proof is valid(_block_hash is also verified).
             # remove its block hash to verify pow_proof as block hash was set after pow
             if not self.check_pow_proof(block_to_add, pow_proof):
-                print("called 2")
                 return False
             # All verifications done.
+            
             # specific to worker - set block hash
+            # still necessary??
             block_to_add.set_hash()
+            
             self._blockchain.append_block(block_to_add)
             return True
         else:
             # only check 2. above
             if not self.check_pow_proof(block_to_add, pow_proof):
-                print("called 3")
                 return False
             # add genesis block
             # specific to worker - set block hash
@@ -461,9 +527,9 @@ class Worker:
 app = Flask(__name__)
 
 # pre-defined and agreed fields
-DATA_DIM = 4
-SAMPLE_SIZE = 3
-STEP_SIZE = 3
+DATA_DIM = 3 # MUST BE CONSISTENT ACROSS ALL WORKERS
+SAMPLE_SIZE = 2 # not necessarily consistent
+STEP_SIZE = 1
 EPSILON = 0.02
 
 PROMPT = ">>>"
@@ -516,26 +582,29 @@ def runApp():
     device.worker_generate_dummy_data()
 
     # TODO change to < EPSILON
-    while True:
+    epochs = 0
+    while epochs < 150: 
         print(f"\nStarting epoch {device.get_current_epoch()}...\n")
         print(f"{PROMPT} This is workder with ID {device.get_idx()}")
         # while registering, chain was synced, if any
         if DEBUG_MODE:
-            cont = input("\nStep1. first let worker do local updates. Continue?\n")
+            print("\nStep1. first let worker do local updates.\n")
+            # cont = input("\nStep1. first let worker do local updates. Continue?\n")
         print(f"{PROMPT} Worker is performing Step1 - local update...\n")
-        upload = device.worker_local_update()
+        # upload = device.worker_local_update()
+        upload = device.worker_local_update_linear_regresssion()
         # used for debugging
         if DEBUG_MODE:
             print("Local updates done.")
-            print(f"local_weight_update: {upload['local_weight_update']}")
-            print(f"global_gradients_per_data_point: {upload['global_gradients_per_data_point']}")
+            # print(f"local_weight_update: {upload['local_weight_update']}")
+            # print(f"global_gradients_per_data_point: {upload['global_gradients_per_data_point']}")
+            print(f"feature_gradients: {upload['feature_gradients']}")
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            cont = input("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner. Continue?\n")
+            # cont = input("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner. Continue?\n")
+            print("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner.\n")
         miner_address = device.worker_associate_miner_with_same_epoch()
-        # FOR PRESENTATION
-        miner_address = 'http://127.0.0.1:5000'
         # if DEBUG_MODE:
         #     print("miner_address", miner_address)
         # while miner_address is not None:
@@ -552,10 +621,13 @@ def runApp():
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
         if DEBUG_MODE:
             cont = input("Now, worker is waiting to download the added block from its associated miners to do global updates...\n")
+            # print("Now, worker is waiting to download the added block from its associated miners to do global updates for 5 secs...")
+            time.sleep(5)
         # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
         # time.sleep(180)
         # if DEBUG_MODE:
         #     cont = input("Next epoch. Continue?\n")
+        epochs += 1
 
 @app.route('/get_rewards_from_miner', methods=['POST'])
 def get_rewards_from_miner():
@@ -581,7 +653,8 @@ def download_block_from_miner():
     added = device.worker_add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
     if added:
-        device.worker_global_update()
+        # device.worker_global_update_SVRG()
+        device.worker_global_update_linear_regression()
         return "Success", 201
     else:
         return "Nah"
