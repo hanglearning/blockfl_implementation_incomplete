@@ -441,6 +441,10 @@ class Miner:
             if not self.check_pow_proof(block_to_add, pow_proof):
                 return False
             # All verifications done.
+
+            # When syncing by calling consensus(), rebuilt block doesn't have this field. add the block hash after verifying
+            block_to_add.set_hash()
+
             self._blockchain.append_block(block_to_add)
             return True
         else:
@@ -448,6 +452,7 @@ class Miner:
             if not self.check_pow_proof(block_to_add, pow_proof):
                 return False
             # add genesis block
+            block_to_add.set_hash()
             self._blockchain.append_block(block_to_add)
             return True
     

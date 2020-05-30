@@ -186,8 +186,8 @@ class Worker:
 
         # if using torch.randit to generate x and y, calculating gradient will give Long tensor error, so https://discuss.pytorch.org/t/generating-random-tensors-according-to-the-uniform-distribution-pytorch/53030
         # define range
-        # self._sample_size = random.randint(5, 10)
-        self._sample_size = 2
+        self._sample_size = random.randint(5, 10)
+        # self._sample_size = 2
         r1, r2 = 0, 2
         if not self._data:
             self.expected_w = torch.tensor([[3.0], [7.0], [12.0]])
@@ -455,10 +455,10 @@ class Worker:
                 return False
             # All verifications done.
             
-            # specific to worker - set block hash
-            # still necessary??
+            # rebuilt block doesn't have this field at any time as worker itself doesn't generate block
+            # add the block hash after verifying
             block_to_add.set_hash()
-            
+
             self._blockchain.append_block(block_to_add)
             return True
         else:
@@ -466,7 +466,6 @@ class Worker:
             if not self.check_pow_proof(block_to_add, pow_proof):
                 return False
             # add genesis block
-            # specific to worker - set block hash
             block_to_add.set_hash()
             self._blockchain.append_block(block_to_add)
             return True
@@ -647,8 +646,7 @@ def download_block_from_miner():
                       downloaded_block["_transactions"],
                       downloaded_block["_block_generation_time"],
                       downloaded_block["_previous_hash"],
-                      downloaded_block["_nonce"],
-                      downloaded_block['_block_hash'])
+                      downloaded_block["_nonce"])
 
     added = device.worker_add_block(rebuilt_downloaded_block, pow_proof)
     # TODO proper way to trigger global update??
