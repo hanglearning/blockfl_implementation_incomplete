@@ -9,6 +9,7 @@ import torch
 import os
 import binascii
 import copy
+from threading import Event
 
 import json
 from hashlib import sha256
@@ -118,6 +119,7 @@ class Worker:
         # sample size(Ni)
         self._sample_size = None
         self._rewards = 0
+        self._jump_to_next_epoch = False
 
     ''' getters '''
     # get device id
@@ -140,6 +142,9 @@ class Worker:
     # get global_weight_vector, used while being the register_with node to sync with the registerer node
     def get_global_weight_vector(self):
         return self._global_weight_vector
+    
+    def if_jump_to_next_epoch(self):
+        return self._jump_to_next_epoch
 
     ''' setters '''
     # set data dimension
@@ -160,6 +165,12 @@ class Worker:
         self._ip_and_port = ip_and_port
 
     ''' Functions for Workers '''
+
+    def set_jump_to_next_epoch_True(self):
+        self._jump_to_next_epoch = True
+
+    def reset_related_vars_for_new_epoch(self):
+        self._jump_to_next_epoch = False
 
     def worker_set_sample_size(self, sample_size):
         # technically miner does not need sample_size, but our program allows role change for every epoch, and sample_size will not change if change role back and forth. Thus, we will first set sample_size for the device, no matter it is workder or miner, since it doesn't matter for miner to have this value as well. Same goes for step_size.
@@ -203,88 +214,121 @@ class Worker:
         else:
             print("The data of this worker has already been initialized. Changing data is not currently implemented in this version.")
 
-    # worker global weight initialization or update
+    # worker global weight initialization
     def worker_init_global_weihgt(self):
         if self._is_miner:
             print("Miner does not set weight values")
         else:
-            if self._global_weight_vector is None:
-                # if not updating, initialize with all 0s, as directed by Dr. Park
-                # Or, we should hard code a vector with some small values for the device class as it has to be the same for every device at the beginning
-                self._global_weight_vector = torch.zeros(self._data_dim, 1)
-            else:
-                print("This function shouldn't be called.")
+            self._global_weight_vector = torch.zeros(self._data_dim, 1)
+            
     
-    def worker_associate_miner_with_same_epoch(self):
-        if self._is_miner:
-            print("Miner does not associate with another miner.")
-            return None
-        else:
+    def worker_update_peers_and_find_miners_within_the_same_epoch(self):
+        associated_miner_address = None
+        while True:
             potential_new_peers = set()
             miner_nodes = set()
+            offline_nodes = set()
             for node in peers:
                 response = requests.get(f'{node}/get_role')
                 if response.status_code == 200:
+                    response_peers = requests.get(f'{node}/get_peers')
+                    if response_peers.status_code == 200:
+                        potential_new_peers.update(response_peers.json()['peers'])
                     if response.text == 'Miner':
-                        response2 = requests.get(f'{node}/get_miner_epoch')
-                        if response2.status_code == 200:
-                            if int(response2.text) == self.get_current_epoch():
+                        response_miner = requests.get(f'{node}/get_miner_epoch')
+                        if response_miner.status_code == 200:
+                            if int(response_miner.text) == self.get_current_epoch():
                                 miner_nodes.add(node)
-                                # side action - update (worker) peers from all miners
-                                #TODO, actually, though worker peer, may also update its peer list
-                                response3 = requests.get(f'{node}/get_peers')
-                                if response3.status_code == 200:
-                                    potential_new_peers.update(response3.json()['peers'])
                 else:
-                    return "Error in worker_associate_miner_with_same_epoch()", response.status_code
+                    # node most likely offline
+                    offline_nodes.update(node)
             peers.update(potential_new_peers)
+            # https://stackoverflow.com/questions/49348340/how-to-remove-multiple-elements-from-a-set
+            peers.difference_update(offline_nodes)
             try:
                 peers.remove(self._ip_and_port)
             except:
                 pass
-        # associate a random miner
-        if miner_nodes:
-            return random.sample(miner_nodes, 1)[0]
-        else:
-            # no device in this epoch is assigned as a miner
-            return None
+            # associate a random miner
+            if miner_nodes:
+                # return random.sample(miner_nodes, 1)[0]
+                # return the whole miner list to random assign in the next step - upload, in case the chosen miner is in epoch
+                return miner_nodes
+            else:
+                # no device in this epoch is assigned as a miner, wait 5 sec
+                print("No miners found. Try resyncing chain...")
+                if device.consensus():
+                    print("Longer chain is found. Recalculating global model...")
+                    self.post_resync_linear_regression()
+                    self.set_jump_to_next_epoch_True()
+                    return None
+                else:
+                    waiting_time = 5
+                    print(f"No miners found. Re-find in {waiting_time} secs.")
+                    while True:
+                        sys.stdout.write(f'\rWaiting {waiting_time}...')
+                        time.sleep(1)
+                        sys.stdout.flush()
+                        waiting_time -= 1
+                        if waiting_time == 0:
+                            break
     
-    def worker_upload_to_miner(self, upload, miner_address):
+    def worker_associate_and_upload_to_miner(self, upload, miners_list):
         if self._is_miner:
             print("Worker does not accept other workers' updates directly")
         else:
-            checked = False
-            # check if this node is still a miner 
-            response = requests.get(f'{miner_address}/get_role')
-            if response.status_code == 200:
-                if response.text == 'Miner':
-                    # check if worker and miner are in the same epoch
-                    response_epoch = requests.get(f'{miner_address}/get_miner_epoch')
-                    if response_epoch.status_code == 200:
-                        miner_epoch = int(response_epoch.text)
-                        if miner_epoch == self.get_current_epoch():
-                            checked = True
+            while True:
+                miner_address = random.sample(miners_list, 1)[0]
+                print(f"{PROMPT} This workder {device.get_ip_and_port()}({device.get_idx()}) now assigned to miner with address {miner_address}.\n")
+                checked = False
+                # check if this node is still a miner 
+                response = requests.get(f'{miner_address}/get_role')
+                if response.status_code == 200:
+                    if response.text == 'Miner':
+                        # check if worker and miner are in the same epoch
+                        response_epoch = requests.get(f'{miner_address}/get_miner_epoch')
+                        if response_epoch.status_code == 200:
+                            miner_epoch = int(response_epoch.text)
+                            if miner_epoch == self.get_current_epoch():
+                                checked = True
+                            else:
+                                pass
+                                # TODO not performing the same epoch, resync the chain
+                                # consensus()?
+                if checked:
+                    # check if miner is within the wait time of accepting updates
+                    response_miner_accepting = requests.get(f'{miner_address}/within_miner_wait_time')
+                    if response_miner_accepting.status_code == 200:
+                        if response_miner_accepting.text == "True":
+                            # send this worker's address to let miner remember to request this worker to download the block later
+                            upload['this_worker_address'] = self._ip_and_port
+                            miner_upload_endpoint = f"{miner_address}/new_transaction"
+                            #miner_upload_endpoint = "http://127.0.0.1:5001/new_transaction"
+                            response_miner_has_accepted = requests.post(miner_upload_endpoint,
+                                data=json.dumps(upload),
+                                headers={'Content-type': 'application/json'})
+                            if response_miner_has_accepted.text == "True":
+                                return
+                            else:
+                                pass
                         else:
+                            # # TODO What to do next?
+                            # return "Not within miner waiting time."
+                            # reassign a miner
                             pass
-                            # TODO not performing the same epoch, resync the chain
-                            # consensus()?
-            if checked:
-                # check if miner is within the wait time of accepting updates
-                response_miner_accepting = requests.get(f'{miner_address}/within_miner_wait_time')
-                if response_miner_accepting.status_code == 200:
-                    if response_miner_accepting.text == "True":
-                        # send this worker's address to let miner remember to request this worker to download the block later
-                        upload['this_worker_address'] = self._ip_and_port
-                        miner_upload_endpoint = f"{miner_address}/new_transaction"
-                        #miner_upload_endpoint = "http://127.0.0.1:5001/new_transaction"
-                        requests.post(miner_upload_endpoint,
-                            data=json.dumps(upload),
-                            headers={'Content-type': 'application/json'})
                     else:
-                        # TODO What to do next?
-                        return "Not within miner waiting time."
+                        pass
+                        # return "Error getting miner waiting status", response_miner_accepting.status_code
                 else:
-                    return "Error getting miner waiting status", response_miner_accepting.status_code
+                    # first try resync chain
+                    if device.consensus():
+                        print("Longer chain is found. Recalculating global model...")
+                        self.post_resync_linear_regression()
+                        self.set_jump_to_next_epoch_True()
+                        return
+                    # reassign a miner
+                    miners_list.remove(miner_address)
+                    miner_address = random.sample(miners_list, 1)[0]
     
     def worker_receive_rewards_from_miner(self, rewards):
         print(f"Before rewarded, this worker has rewards {self._rewards}.")
@@ -377,15 +421,12 @@ class Worker:
             # worker_id and worker_ip is not required to be recorded to the block. Just for debugging purpose
             return {"worker_id": self._idx, "worker_ip": self._ip_and_port, "local_weight_update": {"update_tensor_to_list": local_weight.tolist(), "tensor_type": local_weight.type()}, "global_gradients_per_data_point": global_gradients_per_data_point, "computation_time": time.time() - start_time}
 
-    def worker_global_update_linear_regression(self):
-        print("This worker is performing global updates...")
+    def linear_regression_one_epoch(self, transaction):
         # alpha
         learning_rate = 0.1
-        transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
-        print("transactions_in_downloaded_block", transactions_in_downloaded_block)
         feature_gradients_tensor_accumulator = torch.zeros_like(self._global_weight_vector)
         num_of_device_updates = 0
-        for update in transactions_in_downloaded_block:
+        for update in transaction:
             num_of_device_updates += 1
             feature_gradients_list = update["feature_gradients"]["feature_gradients_list"]
             feature_gradients_tensor_type = update["feature_gradients"]["tensor_type"]
@@ -407,9 +448,28 @@ class Worker:
             print(f"For datapoint {data_point_iter}, abs difference from true label: {abs(self._global_weight_vector.t()@data_point['x']-data_point['y'])}")
             with open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/prediction_diff_point_{self._idx}_{data_point_iter+1}.txt', "a") as myfile:
                 myfile.write(str(abs(self._global_weight_vector.t()@data_point['x']-data_point['y']))+'\n')
+
+
+    def worker_global_update_linear_regression(self):
+        print("This worker is performing global updates...")
+        transactions_in_downloaded_block = self._blockchain.get_last_block().get_transactions()
+        print("transactions_in_downloaded_block", transactions_in_downloaded_block)
+        self.linear_regression_one_epoch(transactions_in_downloaded_block)
         print("====================")
         print("Global Update Done.")
-        print("Press ENTER to continue to the next epoch...")
+        # print("Press ENTER to continue to the next epoch...")
+
+    def post_resync_linear_regression(self):
+        self.worker_init_global_weihgt()
+        newly_synced_blockchain = self.get_blockchain()
+        # overwrite log files
+        open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/updated_weights_{self._idx}.txt', "w")
+        open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/weights_diff_{self._idx}.txt', "w")
+        for data_point_iter in range(len(self._data)):
+            open(f'/Users/chenhang91/TEMP/Blockchain Research/convergence_logs/prediction_diff_point_{self._idx}_{data_point_iter+1}.txt', "w")
+        for block in device.get_blockchain()._chain:
+            transactions_in_block = block.get_transactions()
+            self.linear_regression_one_epoch(block)
 
     # TODO
     def worker_global_update_SVRG(self):
@@ -530,6 +590,7 @@ DATA_DIM = 3 # MUST BE CONSISTENT ACROSS ALL WORKERS
 SAMPLE_SIZE = 2 # not necessarily consistent
 STEP_SIZE = 1
 EPSILON = 0.02
+GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME = 10
 
 PROMPT = ">>>"
 
@@ -557,6 +618,10 @@ def get_worker_epoch():
         # TODO make return more reasonable
         return "error"
 
+# https://stackoverflow.com/questions/25029537/interrupt-function-execution-from-another-function-in-python
+# https://www.youtube.com/watch?v=YSjIisKdgD0
+global_update_or_chain_resync_done = Event()
+
 # start the app
 # assign tasks based on role
 @app.route('/')
@@ -565,8 +630,6 @@ def runApp():
     print(f"\n==================")
     print(f"|  BlockFL Demo  |")
     print(f"==================\n")
-    if DEBUG_MODE:
-        print("System running in sequential mode...\n")
     
     print(f"{PROMPT} Device is setting data dimensionality {DATA_DIM}")
     device.set_data_dim(DATA_DIM)
@@ -580,52 +643,81 @@ def runApp():
     print(f"Dummy data generated.")
     device.worker_generate_dummy_data()
 
+    # while registering, chain was synced, if any
     # TODO change to < EPSILON
     epochs = 0
     while epochs < 150: 
         print(f"\nStarting epoch {device.get_current_epoch()}...\n")
         print(f"{PROMPT} This is workder with ID {device.get_idx()}")
-        # while registering, chain was synced, if any
-        if DEBUG_MODE:
-            print("\nStep1. first let worker do local updates.\n")
+        print("\nStep1. Worker is performing local gradients calculation...\n")
+        # if DEBUG_MODE:
             # cont = input("\nStep1. first let worker do local updates. Continue?\n")
-        print(f"{PROMPT} Worker is performing Step1 - local update...\n")
         # upload = device.worker_local_update()
         upload = device.worker_local_update_linear_regresssion()
+        print("Local updates done.")
         # used for debugging
         if DEBUG_MODE:
-            print("Local updates done.")
             # print(f"local_weight_update: {upload['local_weight_update']}")
             # print(f"global_gradients_per_data_point: {upload['global_gradients_per_data_point']}")
             print(f"feature_gradients: {upload['feature_gradients']}")
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
-        if DEBUG_MODE:
+        # if DEBUG_MODE:
             # cont = input("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner. Continue?\n")
-            print("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner.\n")
-        miner_address = device.worker_associate_miner_with_same_epoch()
+        print("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner.\n")
+        miners_list = device.worker_update_peers_and_find_miners_within_the_same_epoch()
         # if DEBUG_MODE:
         #     print("miner_address", miner_address)
         # while miner_address is not None:
-        if miner_address is not None:
+        # if miner_address is not None:
+        # if miners_list is None, meaning the chain is resynced
+        if miners_list is not None:
             # print(f"{PROMPT} Miner must now enter the phase to accept worker uploads!!!")
-            print(f"{PROMPT} This workder {device.get_ip_and_port()}({device.get_idx()}) now assigned to miner with address {miner_address}.\n")
             # worker uploads data to miner
-            device.worker_upload_to_miner(upload, miner_address)
+            device.worker_associate_and_upload_to_miner(upload, miners_list)
         # else: dealt with after combining two classes
         #     wait_new_miner_time = 10
         #     print(f"No miner in peers yet. Re-requesting miner address in {wait_new_miner_time} secs")
         #     time.sleep(wait_new_miner_time)
-        #     miner_address = device.worker_associate_miner_with_same_epoch()
+        #     miner_address = device.worker_update_peers_and_find_miners_within_the_same_epoch()
         # TODO during this time period the miner may request the worker to download the block and finish global updating. Need thread programming!
-        if DEBUG_MODE:
-            cont = input("Now, worker is waiting to download the added block from its associated miners to do global updates...\n")
+        #if DEBUG_MODE:
+            # https://stackoverflow.com/questions/517127/how-do-i-write-output-in-same-place-on-the-console
+        if not device.if_jump_to_next_epoch():
+            print(f"Now, worker is waiting for {GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME}s to download the added block from its associated miners to do global updates...\n")
+            global global_update_or_chain_resync_done
+            while True:
+                waiting_time = GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME
+                while not global_update_or_chain_resync_done.is_set():
+                    sys.stdout.write(f'\rWaiting {waiting_time}...')
+                    time.sleep(1)
+                    sys.stdout.flush()
+                    waiting_time -= 1
+                    if waiting_time == 0:
+                        break
+                if global_update_or_chain_resync_done.is_set():
+                    # begin next epoch
+                    global_update_or_chain_resync_done.clear()
+                    break
+                else:
+                    # resync chain to see if a longer chain can be found
+                    if device.consensus():
+                        # DO GLOBAL UPDATE OR REVERSE AND GLOBAL(if there's split)
+                        print("Longer chain is found. Recalculating global model...")
+                        self.post_resync_linear_regression()
+                        global_update_or_chain_resync_done.clear()
+                        break
+                    else:
+                        # not found a longer chain, go back to wait for the download
+                        print("\nResetting waiting for global update timer...")
+                        pass
+
             # print("Now, worker is waiting to download the added block from its associated miners to do global updates for 5 secs...")
-            time.sleep(5)
         # adjust based on difficulty... Maybe not limit this. Accept at any time. Then give a fork ark. Set a True flag.
         # time.sleep(180)
         # if DEBUG_MODE:
         #     cont = input("Next epoch. Continue?\n")
+        device.reset_related_vars_for_new_epoch()
         epochs += 1
 
 @app.route('/get_rewards_from_miner', methods=['POST'])
@@ -653,9 +745,18 @@ def download_block_from_miner():
     if added:
         # device.worker_global_update_SVRG()
         device.worker_global_update_linear_regression()
+        global global_update_or_chain_resync_done
+        global_update_or_chain_resync_done.set()
         return "Success", 201
     else:
-        return "Nah"
+        # The downloaded block might have been damped. Resync chain
+        while True:
+            if device.consensus():
+                self.post_resync_linear_regression()
+                return "Chain Resynced"
+            else:
+                pass
+
 
 # endpoint to return the node's copy of the chain.
 # Our application will be using this endpoint to query the contents in the chain to display
@@ -716,9 +817,6 @@ def sync_chain_from_dump(chain_dump):
             pass
             # break
     # return generated_blockchain
-
-
-
 
 ''' add node to the network '''
 
