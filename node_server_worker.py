@@ -179,6 +179,7 @@ class Worker:
         # else:
         self._sample_size = sample_size
 
+    # SVRG only
     def worker_set_step_size(self, step_size):
         # if self._is_miner:
         #     print("Step size is only for workers to calculate weight updates.")
@@ -234,25 +235,61 @@ class Worker:
                 r'(?:/?|[/?]\S+)$', re.IGNORECASE)
         return re.match(regex, input_address) is not None
     
+    # fault tolerance code shall be put into a single file
+    # common methods should be put in a single Device class as Worker and Miner parent class
+    # well, may still need to distribute this functionality to everywhere needed
+    def retry_offline_peers(self, potential_offline_node):
+        retry_times = OFFLINE_PEER_RETRY_TIMES
+        retry_seconds = OFFLINE_PEER_WAITING_TIME
+        print(f"Peer {potential_offline_node} cannot be reached. Will do {retry_times} reconnection attemps.")
+        while retry_times > 0:
+            print(f"{retry_times} attempts left...")
+            sys.stdout.write(f'\rWaiting {retry_seconds}...')
+            time.sleep(1)
+            sys.stdout.flush()
+            waiting_time -= 1
+            if waiting_time == 0:
+                response = requests.get(f'{node}/get_peers')
+                if response.status_code == 200:
+                    print(f"Node {potential_offline_node} back online.")
+                    return True
+                else:
+                    print(f"Node {potential_offline_node} still offline.")
+                    retry_times -= 1
+                    continue
+        return False
+
     # called in find_miners_within_the_same_epoch() and register_with
     def update_peers(self):
-        while not peers:
-            candidate_peer = input("\nNo peer found in network. Please input a peer address with port number by the example format - http://127.0.0.1:5000\n")
-            self.check_candidate_node_address(candidate_peer)
-            while not self.check_candidate_node_address(candidate_peer):
-                candidate_peer = input("\nInput format invalid. Please follow this example - http://127.0.0.1:5000\n")
-            response_candidate_peer = requests.get(f'{candidate_peer}/get_peers')
-            if response_candidate_peer.status_code == 200:
-                peers.add(candidate_peer)
-                print("\nUpdating peers...\n")
-                break
-            else:
-                print("\nThe input peer address is not found in the network.\n")
-        potential_new_peers = set()
+        # while not peers:
+        #     candidate_peer = input("\nNo peer found in network. Please input a peer address with port number by the example format - http://127.0.0.1:5000\n")
+        #     self.check_candidate_node_address(candidate_peer)
+        #     while not self.check_candidate_node_address(candidate_peer):
+        #         candidate_peer = input("\nInput format invalid. Please follow this example - http://127.0.0.1:5000\n")
+        #     response_candidate_peer = requests.get(f'{candidate_peer}/get_peers')
+        #     if response_candidate_peer.status_code == 200:
+        #         peers.add(candidate_peer)
+        #         print("\nUpdating peers...\n")
+        #         break
+        #     else:
+        #         print("\nThe input peer address is not found in the network.\n")
+        if not peers:
+            # wait for user input for a new node address? other threads become tricky to handle.
+            # need to setup some distributed nodes to keep some solid peer address
+            # or, this is now more realistic. Abort the system and register with each other.
+            sys.exit("No peers found in the network. System aborted. Please restart the node and become a register/registrant.")
+            # retry 3 times before removing a peer 
         offline_nodes = set()
         for node in peers:
-            response = requests.get(f'{node}/get_peers')
-            if response.status_code == 200:
+            response_peers = requests.get(f'{node}/get_peers')
+            node_online = False
+            if response_peers.status_code == 200:
+                node_online = True
+            else:
+                node_online = self.retry_offline_peers(node)
+                response_peers = requests.get(f'{node}/get_peers')
+                # WRONG! response_peers may go offline again!
+            if node_online:
                 potential_new_peers.update(response_peers.json()['peers'])
             else:
                 # node most likely offline
@@ -265,22 +302,31 @@ class Worker:
         while True:
             self.update_peers()
             miner_nodes = set()
+            offline_nodes = set()
             for node in peers:
                 response = requests.get(f'{node}/get_role')
-                if response.status_code == 200:
-                    if response.text == 'Miner':
-                        response_miner = requests.get(f'{node}/get_miner_epoch')
-                        if response_miner.status_code == 200:
-                            if int(response_miner.text) == self.get_current_epoch():
-                                miner_nodes.add(node)
+                retry_times = OFFLINE_PEER_RETRY_TIMES
+                while True:
+                    if response.status_code == 200:
+                        if response.text == 'Miner':
+                            response_miner = requests.get(f'{node}/get_miner_epoch')
+                            if response_miner.status_code == 200:
+                                if int(response_miner.text) == self.get_current_epoch():
+                                    miner_nodes.add(node)
+                                    break
+                    else:
+                        retry_times -= 1
+                        if retry_times == 0:
+                            # peer offline
+                            offline_nodes.update(node)
+                            break
+            peers.difference_update(offline_nodes)
             try:
                 peers.remove(self._ip_and_port)
             except:
                 pass
-            # associate a random miner
             if miner_nodes:
-                # return random.sample(miner_nodes, 1)[0]
-                # return the whole miner list to random assign in the next step - upload, in case the chosen miner is in epoch
+                # return the whole miner list to random assign in the next step
                 return miner_nodes
             else:
                 # no device in this epoch is assigned as a miner, wait 5 sec
@@ -366,15 +412,11 @@ class Worker:
             print("Miner does not perfrom gradient calculations.")
         else:
             start_time = time.time()
-            # local_weight = self._global_weight_vector
-            # last_block = self._blockchain.get_last_block()
             # https://d18ky98rnyall9.cloudfront.net/_7532aa933df0e5055d163b77102ff2fb_Lecture4.pdf?Expires=1590451200&Signature=QX0rGKTvN6Wc1OgL~M5d23cibJF0fQ7jMWG5dSO3ooaKfYH~Yl4UadTvLQn2KFdUqAMwUaMwKl3kFG65f4w~R62xyumryaHTRDO7K8f5c8kM7v62OYDr0xDvuJ8K3B-Rjr6XbmnCx6tOo6Fi-sAm-fXbWz2cfJVrm6a2jaJU1BI_&Key-Pair-Id=APKAJLTNE6QMUY6HBC5A page 8
             # part of the gradient decent formular after alpha*(1/m)
             feature_gradients_tensor = torch.zeros(self._data_dim, 1)
             for data_point in self._data:
                 difference_btw_hypothesis_and_true_label = data_point['x'].t()@self._global_weight_vector - data_point['y']
-                # for feature_value_iter in range(self._data_dim):
-                #     feature_gradients_tensor[feature_value_iter] += (difference_btw_hypothesis_and_true_label * data_point['x'][feature_value_iter]).squeeze(0)
                 feature_gradients_tensor += difference_btw_hypothesis_and_true_label * data_point['x']
             feature_gradients_tensor /= len(self._data)
         
@@ -625,6 +667,7 @@ SAMPLE_SIZE = 2 # not necessarily consistent
 STEP_SIZE = 1
 EPSILON = 0.02
 GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME = 10
+OFFLINE_PEER_RETRY_TIMES = 3
 
 PROMPT = ">>>"
 
@@ -695,11 +738,11 @@ def runApp():
         print("\nStep1. Worker is performing local gradients calculation...\n")
         # if DEBUG_MODE:
             # cont = input("\nStep1. first let worker do local updates. Continue?\n")
-        # upload = device.worker_local_update()
         upload = device.worker_local_update_linear_regresssion()
         print("Local updates done.")
         # used for debugging
         if DEBUG_MODE:
+            # for SVRG
             # print(f"local_weight_update: {upload['local_weight_update']}")
             # print(f"global_gradients_per_data_point: {upload['global_gradients_per_data_point']}")
             print(f"feature_gradients: {upload['feature_gradients']}")
@@ -711,11 +754,8 @@ def runApp():
         miners_list = device.find_miners_within_the_same_epoch()
         # if DEBUG_MODE:
         #     print("miner_address", miner_address)
-        # while miner_address is not None:
-        # if miner_address is not None:
-        # if miners_list is None, meaning the chain is resynced
         if miners_list is not None:
-            # print(f"{PROMPT} Miner must now enter the phase to accept worker uploads!!!")
+            # if miners_list is None, meaning the chain is resynced
             # worker uploads data to miner
             device.worker_associate_and_upload_to_miner(upload, miners_list)
         # else: dealt with after combining two classes
@@ -727,7 +767,7 @@ def runApp():
         #if DEBUG_MODE:
             # https://stackoverflow.com/questions/517127/how-do-i-write-output-in-same-place-on-the-console
         if not device.if_jump_to_next_epoch():
-            print(f"Now, worker is waiting for {GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME}s to download the added block from its associated miners to do global updates...\n")
+            print(f"Now, worker is waiting for {GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME}s to download the added block from its associated miner to do global updates...\n")
             global global_update_or_chain_resync_done
             while True:
                 waiting_time = GLOBAL_BLOCK_AND_UPDATE_WAITING_TIME
@@ -738,6 +778,7 @@ def runApp():
                     waiting_time -= 1
                     if waiting_time == 0:
                         break
+                # global_update_or_chain_resync_done is set() in /download_block_from_miner
                 if global_update_or_chain_resync_done.is_set():
                     # begin next epoch
                     global_update_or_chain_resync_done.clear()
@@ -745,7 +786,6 @@ def runApp():
                 else:
                     # resync chain to see if a longer chain can be found
                     if device.consensus():
-                        # DO GLOBAL UPDATE OR REVERSE AND GLOBAL(if there's split)
                         print("Longer chain is found. Recalculating global model...")
                         self.post_resync_linear_regression()
                         global_update_or_chain_resync_done.clear()

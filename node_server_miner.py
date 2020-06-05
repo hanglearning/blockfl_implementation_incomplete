@@ -224,26 +224,42 @@ class Miner:
                 r'(?::\d+)?' # optional port
                 r'(?:/?|[/?]\S+)$', re.IGNORECASE)
         return re.match(regex, input_address) is not None
+
+    def retry_offline_peers(self, potential_offline_node):
+        retry_times = OFFLINE_PEER_RETRY_TIMES
+        retry_seconds = OFFLINE_PEER_WAITING_TIME
+        print(f"Peer {potential_offline_node} cannot be reached. Will do {retry_times} reconnection attemps.")
+        while retry_times > 0:
+            print(f"{retry_times} attempts left...")
+            sys.stdout.write(f'\rWaiting {retry_seconds}...')
+            time.sleep(1)
+            sys.stdout.flush()
+            waiting_time -= 1
+            if waiting_time == 0:
+                response = requests.get(f'{node}/get_peers')
+                if response.status_code == 200:
+                    print(f"Node {potential_offline_node} back online.")
+                    return True
+                else:
+                    print(f"Node {potential_offline_node} still offline.")
+                    retry_times -= 1
+                    continue
+        return False
     
     # called in find_miners_within_the_same_epoch() and register_with
     def update_peers(self):
-        while not peers:
-            candidate_peer = input("\nNo peer found in network. Please input a peer address with port number by the example format - http://127.0.0.1:5000\n")
-            self.check_candidate_node_address(candidate_peer)
-            while not self.check_candidate_node_address(candidate_peer):
-                candidate_peer = input("\nInput format invalid. Please follow this example - http://127.0.0.1:5000\n")
-            response_candidate_peer = requests.get(f'{candidate_peer}/get_peers')
-            if response_candidate_peer.status_code == 200:
-                peers.add(candidate_peer)
-                print("\nUpdating peers...\n")
-                break
-            else:
-                print("\nThe input peer address is not found in the network.\n")
-        potential_new_peers = set()
+        if not peers:
+            sys.exit("No peers found in the network. System aborted. Please restart the node and become a register/registrant.")
         offline_nodes = set()
         for node in peers:
-            response = requests.get(f'{node}/get_peers')
-            if response.status_code == 200:
+            response_peers = requests.get(f'{node}/get_peers')
+            node_online = False
+            if response_peers.status_code == 200:
+                node_online = True
+            else:
+                node_online = self.retry_offline_peers(node)
+                response_peers = requests.get(f'{node}/get_peers')
+            if node_online:
                 potential_new_peers.update(response_peers.json()['peers'])
             else:
                 # node most likely offline
@@ -256,22 +272,34 @@ class Miner:
         while True:
             self.update_peers()
             miner_nodes = set()
+            offline_nodes = set()
             for node in peers:
-                response = requests.get(f'{node}/get_role')
-                if response.status_code == 200:
+                response_role = requests.get(f'{node}/get_role')
+                node_online = False
+                if response_role.status_code == 200:
                     if response.text == 'Miner':
                         response_miner = requests.get(f'{node}/get_miner_epoch')
                         if response_miner.status_code == 200:
-                            if int(response_miner.text) == self.get_current_epoch():
+                            node_online = True
+                        else:
+                            node_online = self.retry_offline_peers(node)
+                            response_miner = requests.get(f'{node}/get_miner_epoch')
+                else:
+                    node_online = self.retry_offline_peers(node)
+                    if response.text == 'Miner':
+                        response_miner = requests.get(f'{node}/get_miner_epoch')
+                if node_online:
+                    if int(response_miner.text) == self.get_current_epoch():
                                 miner_nodes.add(node)
+                else:
+                    offline_nodes.update(node)
+            peers.difference_update(offline_nodes)
             try:
                 peers.remove(self._ip_and_port)
             except:
                 pass
-            # associate a random miner
             if miner_nodes:
-                # return random.sample(miner_nodes, 1)[0]
-                # return the whole miner list to random assign in the next step - upload, in case the chosen miner is in epoch
+                # return the whole miner list to random assign in the next step
                 return miner_nodes
             else:
                 # no device in this epoch is assigned as a miner, wait 5 sec
@@ -310,14 +338,24 @@ class Miner:
 
     def request_associated_workers_download(self, pow_proof):
         block_to_download = self._blockchain.get_last_block()
-        # pdb.set_trace()
         data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "block_to_download": block_to_download.__dict__, "pow_proof": pow_proof}
         headers = {'Content-Type': "application/json"}
+        offline_nodes = set()
         if self._associated_workers:
             for worker in self._associated_workers:
                 response = requests.post(f'{worker}/download_block_from_miner', data=json.dumps(data), headers=headers)
+                node_online = False
                 if response.status_code == 200:
+                    node_online = True
+                else:
+                    node_online = self.retry_offline_peers(worker)
+                    # WRONG! REPOST!
+                if node_online:
                     print(f'Requested Worker {worker} to download the block.')
+                    return
+                else:
+                    print(f'The associated worker {worker} goes offline.')
+                    offline_nodes.add()
         else:
             print("No associated workers this round. Begin Next epoch.")
             
@@ -355,7 +393,12 @@ class Miner:
                     data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "rewards": DATA_DIM}
                     headers = {'Content-Type': "application/json"}
                     response = requests.post(f"{update['worker_ip']}/get_rewards_from_miner", data=json.dumps(data), headers=headers)
+                    node_online = False
                     if response.status_code == 200:
+                        node_online = True
+                    else:
+                        self.retry_offline_peers({update['worker_ip']})
+                    if node_online:
                         print(f'Rewards sent!\n')
                     else:
                         # TODO - what if this worker goes offline? It needs a coin address, then private and public key is necessary. Rewards need to be recorded on chain.
@@ -451,9 +494,18 @@ class Miner:
         # broadcast the updates
         for miner in miners_within_the_same_epoch:
             response = requests.post(miner + "/receive_updates_from_miner", data=json.dumps(data), headers=headers)
+            offline_nodes = set()
+            node_online = False
             if response.status_code == 200:
+                node_online = True
+            else:
+                node_online = self.retry_offline_peers(miner)
+                requests.post(miner + "/receive_updates_from_miner", data=json.dumps(data), headers=headers)
+            if node_online:
                 print(f'This miner {self._ip_and_port}({self._idx}) has sent unverified updates to miner {miner}')
-                print('Press ENTER to continue...')
+            else:
+                offline_nodes.add(miner)
+        peers.difference_update(offline_nodes)
         return "ok"
 
     def miner_propagate_the_block(self, block_to_propagate, pow_proof):
@@ -748,6 +800,9 @@ SAMPLE_SIZE = 2
 # miner waits for 180s to fill its candidate block with updates from devices
 MINER_WAITING_UPLOADS_TIME = 10
 PROPAGATED_BLOCK_WAITING_TIME = 10
+OFFLINE_PEER_RETRY_TIMES = 3
+OFFLINE_PEER_WAITING_TIME = 5
+
 
 PROMPT = ">>>"
 
@@ -833,7 +888,7 @@ def runApp():
 
         if not has_added_propagated_block.is_set() and not device.if_jump_to_next_epoch():
             miner_waiting_for_uploads.set()
-            print(f"Miner is waiting for workers for {MINER_WAITING_UPLOADS_TIME} to upload their updates now...\n")
+            print(f"Miner is waiting for workers for {MINER_WAITING_UPLOADS_TIME} sections to upload their updates now...\n")
             waiting_time = MINER_WAITING_UPLOADS_TIME
             while True:
                 sys.stdout.write(f'\rWaiting {waiting_time}...')
