@@ -211,53 +211,84 @@ class Miner:
     #         pass
     #     # if DEBUG_MODE:
     #         # print("After get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
-        
-    def miner_update_peers_and_find_miners_within_the_same_epoch(self):
+    
+    @staticmethod
+    def check_candidate_node_address(input_address):
+        # https://stackoverflow.com/questions/7160737/python-how-to-validate-a-url-in-python-malformed-or-not
+        import re
+        regex = re.compile(
+                r'^(?:http|ftp)s?://' # http:// or https://
+                r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' #domain...
+                r'localhost|' #localhost...
+                r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
+                r'(?::\d+)?' # optional port
+                r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        return re.match(regex, input_address) is not None
+    
+    # called in find_miners_within_the_same_epoch() and register_with
+    def update_peers(self):
+        while not peers:
+            candidate_peer = input("\nNo peer found in network. Please input a peer address with port number by the example format - http://127.0.0.1:5000\n")
+            self.check_candidate_node_address(candidate_peer)
+            while not self.check_candidate_node_address(candidate_peer):
+                candidate_peer = input("\nInput format invalid. Please follow this example - http://127.0.0.1:5000\n")
+            response_candidate_peer = requests.get(f'{candidate_peer}/get_peers')
+            if response_candidate_peer.status_code == 200:
+                peers.add(candidate_peer)
+                print("\nUpdating peers...\n")
+                break
+            else:
+                print("\nThe input peer address is not found in the network.\n")
+        potential_new_peers = set()
+        offline_nodes = set()
+        for node in peers:
+            response = requests.get(f'{node}/get_peers')
+            if response.status_code == 200:
+                potential_new_peers.update(response_peers.json()['peers'])
+            else:
+                # node most likely offline
+                offline_nodes.update(node)
+        peers.update(potential_new_peers)
+        # https://stackoverflow.com/questions/49348340/how-to-remove-multiple-elements-from-a-set
+        peers.difference_update(offline_nodes)
+
+    def find_miners_within_the_same_epoch(self):
         while True:
-            potential_new_peers = set()
+            self.update_peers()
             miner_nodes = set()
-            offline_nodes = set()
             for node in peers:
                 response = requests.get(f'{node}/get_role')
                 if response.status_code == 200:
-                    response_peers = requests.get(f'{node}/get_peers')
-                    if response_peers.status_code == 200:
-                        # update peers
-                        potential_new_peers.update(response_peers.json()['peers'])
                     if response.text == 'Miner':
                         response_miner = requests.get(f'{node}/get_miner_epoch')
                         if response_miner.status_code == 200:
                             if int(response_miner.text) == self.get_current_epoch():
                                 miner_nodes.add(node)
-                else:
-                    # node most likely offline
-                    offline_nodes.update(node)
-            peers.update(potential_new_peers)
-            peers.difference_update(offline_nodes)
             try:
                 peers.remove(self._ip_and_port)
             except:
                 pass
+            # associate a random miner
             if miner_nodes:
+                # return random.sample(miner_nodes, 1)[0]
+                # return the whole miner list to random assign in the next step - upload, in case the chosen miner is in epoch
                 return miner_nodes
             else:
                 # no device in this epoch is assigned as a miner, wait 5 sec
-                print("\nNo miners found. Try resyncing chain...")
+                print("No miners found. Try resyncing chain...")
                 if device.consensus():
-                    print("Longer chain is found. For miner, go to next epoch.")
-                    #TODO
+                    print("Longer chain is found. Recalculating global model...")
+                    self.post_resync_linear_regression()
                     self.set_jump_to_next_epoch_True()
                     return None
                 else:
                     waiting_time = 5
-                    print(f"Not a longer chain found. Re-find miners in {waiting_time} secs.")
-                    while True:
+                    print(f"No miners found. Re-find in {waiting_time} secs.")
+                    while waiting_time > 0:
                         sys.stdout.write(f'\rWaiting {waiting_time}...')
                         time.sleep(1)
                         sys.stdout.flush()
                         waiting_time -= 1
-                        if waiting_time == 0:
-                            break
 
     # TODO should record epoch number in case accidentally remove updates from this epoch
     def reset_related_vars_for_new_epoch(self):
@@ -427,7 +458,7 @@ class Miner:
 
     def miner_propagate_the_block(self, block_to_propagate, pow_proof):
         # refresh the miner nodes in case there's any gone offline
-        device.miner_update_peers_and_find_miners_within_the_same_epoch()
+        device.find_miners_within_the_same_epoch()
 
         data = {"miner_id": self._idx, "miner_ip": self._ip_and_port, "propagated_block": block_to_propagate.__dict__, "pow_proof": pow_proof}
         headers = {'Content-Type': "application/json"}
@@ -540,7 +571,8 @@ class Miner:
         return True
 
     # TODO
-    def consensus(self):
+    # init=True called in register_with_existing_node()
+    def consensus(self, init=False):
         """
         Simple consensus algorithm - if a longer valid chain is found, the current device's chain is replaced with it.
         """
@@ -552,7 +584,14 @@ class Miner:
             response = requests.get(f'{node}/get_chain_meta')
             length = response.json()['length']
             chain = response.json()['chain']
-            if length > chain_len and self.check_chain_validity(chain):
+            chain_len_check = False
+            if init == True:
+                if length >= chain_len:
+                    chain_len_check = True
+            else:
+                 if length > chain_len:
+                    chain_len_check = True
+            if chain_len_check and self.check_chain_validity(chain):
                 # Longer valid chain found!
                 chain_len = length
                 longest_chain = chain
@@ -729,6 +768,9 @@ done_verifying_propagated_block = Event()
 has_added_propagated_block = Event()
 accepting_propagated_block = Event()
 
+print("Ready to start the node.")
+
+
 # start the app
 # assign tasks based on role
 @app.route('/')
@@ -804,7 +846,7 @@ def runApp():
         else:
             jump_to_download_or_next_epoch_warning()
         
-        miners_within_the_same_epoch = device.miner_update_peers_and_find_miners_within_the_same_epoch()
+        miners_within_the_same_epoch = device.find_miners_within_the_same_epoch()
         if not has_added_propagated_block.is_set() and not device.if_jump_to_next_epoch():
             # miner broadcast received local updates
             #if DEBUG_MODE:
@@ -976,9 +1018,8 @@ def sync_chain_from_dump(chain_dump):
         added = device.add_block(block, pow_proof)
         if not added:
             raise Exception("The chain dump is tampered!!")
-        else:
-            pass
-            # break
+            return False
+        return True
     # return generated_blockchain
 
 
@@ -1028,20 +1069,28 @@ def register_with_existing_node():
 
     if response.status_code == 200:
         # global blockchain
-        global peers
+        # global peers
         # add the register_with_node_address as a peer
         peers.add(register_with_node_address)
         # sync the chain
         chain_data_dump = response.json()['chain']
-        sync_chain_from_dump(chain_data_dump)
-        
+        # update peer list according to the register-with node
+        peers.update(response.json()['peers'])
+        is_synced = sync_chain_from_dump(chain_data_dump)
+        while not is_synced:
+            resyncing_wait_time = 5
+            print("Chain syncing failed. Update peer list and resync.")
+            device.update_peers()
+            if peers and device.consensus(init=True):
+                break
+            else:
+                print("This shall never be called.")
+        device.post_resync_linear_regression()
         # NO NO NO sync the global weight from this register_with_node
         # TODO that might be just a string!!!
         # global_weight_to_sync = response.json()['global_weight_vector']
         # change to let node calculate global_weight_vector block by block
 
-        # update peer list according to the register-with node
-        peers.update(response.json()['peers'])
         # remove itself if there is
         try:
             if DEBUG_MODE:
