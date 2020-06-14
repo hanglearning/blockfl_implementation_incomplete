@@ -1,5 +1,5 @@
-# thesis_project
-senior thesis
+# BlockFL implementation
+From Paper - https://arxiv.org/abs/1808.03949
 ref - https://github.com/satwikkansal/python_blockchain_app/tree/ibm_blockchain_post
 ### Register a new node with an existing node
 Example - register 5001 with an existing 5000 node.

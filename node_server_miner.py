@@ -10,6 +10,8 @@ import os
 import binascii
 import copy
 from threading import Event
+from utils import *
+
 
 import json
 from hashlib import sha256
@@ -19,105 +21,15 @@ import logging
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
+from block import Block
+from blockchain import Blockchain
+
 DEBUG_MODE = True # press any key to continue
 
 
-# reference - https://developer.ibm.com/technologies/blockchain/tutorials/develop-a-blockchain-application-from-scratch-in-python/
-class Block:
-    # https://stackoverflow.com/questions/3161827/what-am-i-doing-wrong-python-object-instantiation-keeping-data-from-previous-in
-    # transactions=[] causing errors. Do not pass mutable object as a default value
-    # def __init__(self, idx, transactions=[], block_generation_time=None, previous_hash=None, nonce=0):
-    def __init__(self, idx, transactions=None, block_generation_time=None, previous_hash=None, nonce=0, block_hash=None):
-        self._idx = idx
-        self._transactions = transactions or []
-        self._block_generation_time = block_generation_time
-        self._previous_hash = previous_hash
-        self._nonce = nonce
-        # the hash of the current block, calculated by compute_hash
-        self._block_hash = block_hash
-        
-    # remove time_stamp?
-    def compute_hash(self, hash_previous_block=False):
-        if hash_previous_block:
-            block_content = self.__dict__
-        else:
-            block_content = copy.deepcopy(self.__dict__)
-            block_content['_block_hash'] = None
-        block_content = json.dumps(block_content, sort_keys=True)
-        return sha256(block_content.encode()).hexdigest()
-
-    def set_hash(self):
-        # compute_hash() also used to return value for verification
-        self._block_hash = self.compute_hash()
-
-    def nonce_increment(self):
-        self._nonce += 1
-    
-    def set_nonce(self, nonce):
-        # used if propagated block not verified
-        self._nonce = nonce
-
-    # getters of the private attribute
-    def get_block_hash(self):
-        return self._block_hash
-    
-    def get_previous_hash(self):
-        return self._previous_hash
-
-    def get_block_idx(self):
-        return self._idx
-
-    def get_transactions(self):
-        # get the updates from this block
-        return self._transactions
-
-    def get_current_nonce(self):
-        return self._nonce
-    
-    # def remove_block_hash_to_verify_pow(self):
-    #     self._block_hash = None
-    
-    # setters
-    def set_previous_hash(self, hash_to_set):
-        self._previous_hash = hash_to_set
-
-    def add_verified_transaction(self, transaction):
-        # after verified in cross_verification()
-        self._transactions.append(transaction)
-
-    def set_block_generation_time(self):
-        self._block_generation_time = time.time()
-
-class Blockchain:
-
-    # for PoW
-    difficulty = 2
-
-    def __init__(self):
-        # it is fine to use a python list to store the chain for now
-        # technically this should be _chain as well
-        self._chain = []
-
-    def get_chain_length(self):
-        return len(self._chain)
-
-    def get_last_block(self):
-        if len(self._chain) > 0:
-            return self._chain[-1]
-        else:
-            # blockchain doesn't even have its genesis block
-            return None
-
-    def append_block(self, block):
-        self._chain.append(block)
-
-class Miner:
+class Miner(Device):
     def __init__(self, idx):
-        self._idx = idx
-        self._is_miner = True
-        # miner can also maintain the chain, tho the paper does not mention, but we think miner can be tranferred to worked any time back and forth, and also miner can use this info to obtain the epoch number to check if the uploaded updates from the worker are meant to be put into the same epoch
-        self._blockchain = Blockchain()
-        self._ip_and_port = None
+        Device.__init__(self, idx)
         ''' attributes for miners '''
         self._received_transactions = []
         # used to broadcast block for workers to do global updates
@@ -127,26 +39,10 @@ class Miner:
         # used in miner_broadcast_updates and block propogation
         self._current_epoch_miner_nodes = set()
         self._received_updates_from_miners = []
-        # used in cross_verification and in the future PoS
-        self._rewards = 0
         # self._has_added_propagated_block = False
         self._propagated_block_pow = None
-        self._jump_to_next_epoch = False
 
     ''' getters '''
-    # get device id
-    def get_idx(self):
-        return self._idx
-
-    # get device's copy of blockchain
-    def get_blockchain(self):
-        return self._blockchain
-
-    def get_current_epoch(self):
-        return self._blockchain.get_chain_length()+1
-
-    def get_ip_and_port(self):
-        return self._ip_and_port
 
     # def is_propagated_block_added(self):
     #     return self._has_added_propagated_block
@@ -157,17 +53,8 @@ class Miner:
     def get_propagated_block_pow(self):
         return self._propagated_block_pow
 
-    def if_jump_to_next_epoch(self):
-        return self._jump_to_next_epoch
-
     ''' setters '''
-    # set the consensused blockchain
-    def set_blockchain(self, blockchain):
-        self._blockchain = blockchain
 
-    def set_ip_and_port(self, ip_and_port):
-        self._ip_and_port = ip_and_port
-    
     # def propagated_block_has_been_added(self):
     #     self._has_added_propagated_block = True
     
@@ -176,147 +63,10 @@ class Miner:
 
     ''' Functions for Miners '''
 
-    def get_rewards(self, rewards):
-        self._rewards += rewards
 
     def associate_worker(self, worker_address):
         self._associated_workers.add(worker_address)
-    
-    def set_jump_to_next_epoch_True(self):
-        self._jump_to_next_epoch = True
 
-    # def get_all_current_epoch_workers(self):
-    #     # print("get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
-    #     # self._current_epoch_worker_nodes.clear()
-    #     potential_new_peers = set()
-    #     for node in peers:
-    #         response = requests.get(f'{node}/get_role')
-    #         if response.status_code == 200:
-    #             if response.text == 'Worker':
-    #                 response2 = requests.get(f'{node}/get_worker_epoch')
-    #                 if response2.status_code == 200:
-    #                     if int(response2.text) == self.get_current_epoch():
-    #                         self._current_epoch_worker_nodes.add(node)
-    #                         # side action - update (miner) peers from all workers
-    #                         response3 = requests.get(f'{node}/get_peers')
-    #                         if response3.status_code == 200:
-    #                             potential_new_peers.update(response3.json()['peers'])
-                            
-    #         else:
-    #             return response.status_code
-    #     peers.update(potential_new_peers)
-    #     try:
-    #         peers.remove(self._ip_and_port)
-    #     except:
-    #         pass
-    #     # if DEBUG_MODE:
-    #         # print("After get_all_current_epoch_workers() called", self._current_epoch_worker_nodes)
-    
-    @staticmethod
-    def check_candidate_node_address(input_address):
-        # https://stackoverflow.com/questions/7160737/python-how-to-validate-a-url-in-python-malformed-or-not
-        import re
-        regex = re.compile(
-                r'^(?:http|ftp)s?://' # http:// or https://
-                r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' #domain...
-                r'localhost|' #localhost...
-                r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
-                r'(?::\d+)?' # optional port
-                r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-        return re.match(regex, input_address) is not None
-
-    def retry_offline_peers(self, potential_offline_node):
-        retry_times = OFFLINE_PEER_RETRY_TIMES
-        retry_seconds = OFFLINE_PEER_WAITING_TIME
-        print(f"Peer {potential_offline_node} cannot be reached. Will do {retry_times} reconnection attemps.")
-        while retry_times > 0:
-            print(f"{retry_times} attempts left...")
-            sys.stdout.write(f'\rWaiting {retry_seconds}...')
-            time.sleep(1)
-            sys.stdout.flush()
-            waiting_time -= 1
-            if waiting_time == 0:
-                response = requests.get(f'{node}/get_peers')
-                if response.status_code == 200:
-                    print(f"Node {potential_offline_node} back online.")
-                    return True
-                else:
-                    print(f"Node {potential_offline_node} still offline.")
-                    retry_times -= 1
-                    continue
-        return False
-    
-    # called in find_miners_within_the_same_epoch() and register_with
-    def update_peers(self):
-        if not peers:
-            sys.exit("No peers found in the network. System aborted. Please restart the node and become a register/registrant.")
-        offline_nodes = set()
-        for node in peers:
-            response_peers = requests.get(f'{node}/get_peers')
-            node_online = False
-            if response_peers.status_code == 200:
-                node_online = True
-            else:
-                node_online = self.retry_offline_peers(node)
-                response_peers = requests.get(f'{node}/get_peers')
-            if node_online:
-                potential_new_peers.update(response_peers.json()['peers'])
-            else:
-                # node most likely offline
-                offline_nodes.update(node)
-        peers.update(potential_new_peers)
-        # https://stackoverflow.com/questions/49348340/how-to-remove-multiple-elements-from-a-set
-        peers.difference_update(offline_nodes)
-
-    def find_miners_within_the_same_epoch(self):
-        while True:
-            self.update_peers()
-            miner_nodes = set()
-            offline_nodes = set()
-            for node in peers:
-                response_role = requests.get(f'{node}/get_role')
-                node_online = False
-                if response_role.status_code == 200:
-                    if response.text == 'Miner':
-                        response_miner = requests.get(f'{node}/get_miner_epoch')
-                        if response_miner.status_code == 200:
-                            node_online = True
-                        else:
-                            node_online = self.retry_offline_peers(node)
-                            response_miner = requests.get(f'{node}/get_miner_epoch')
-                else:
-                    node_online = self.retry_offline_peers(node)
-                    if response.text == 'Miner':
-                        response_miner = requests.get(f'{node}/get_miner_epoch')
-                if node_online:
-                    if int(response_miner.text) == self.get_current_epoch():
-                                miner_nodes.add(node)
-                else:
-                    offline_nodes.update(node)
-            peers.difference_update(offline_nodes)
-            try:
-                peers.remove(self._ip_and_port)
-            except:
-                pass
-            if miner_nodes:
-                # return the whole miner list to random assign in the next step
-                return miner_nodes
-            else:
-                # no device in this epoch is assigned as a miner, wait 5 sec
-                print("No miners found. Try resyncing chain...")
-                if device.consensus():
-                    print("Longer chain is found. Recalculating global model...")
-                    self.post_resync_linear_regression()
-                    self.set_jump_to_next_epoch_True()
-                    return None
-                else:
-                    waiting_time = 5
-                    print(f"No miners found. Re-find in {waiting_time} secs.")
-                    while waiting_time > 0:
-                        sys.stdout.write(f'\rWaiting {waiting_time}...')
-                        time.sleep(1)
-                        sys.stdout.flush()
-                        waiting_time -= 1
 
     # TODO should record epoch number in case accidentally remove updates from this epoch
     def reset_related_vars_for_new_epoch(self):
@@ -556,103 +306,6 @@ class Miner:
                 return None
         else:
             print("Worker does not mine transactions.")
-
-    ''' Common Methods '''
-
-    # including adding the genesis block
-    def add_block(self, block_to_add, pow_proof):
-        """
-        A function that adds the block to the chain after two verifications(sanity check).
-        """
-        last_block = self._blockchain.get_last_block()
-        # pdb.set_trace()
-        if last_block is not None:
-            # 1. check if the previous_hash referred in the block and the hash of latest block in the chain match.
-            last_block_hash = last_block.compute_hash(hash_previous_block=True)
-            if block_to_add.get_previous_hash() != last_block_hash:
-                # to be used as condition check later
-                return False
-            # 2. check if the proof is valid(_block_hash is also verified).
-            # remove its block hash to verify pow_proof as block hash was set after pow
-            if not self.check_pow_proof(block_to_add, pow_proof):
-                return False
-            # All verifications done.
-
-            # When syncing by calling consensus(), rebuilt block doesn't have this field. add the block hash after verifying
-            block_to_add.set_hash()
-
-            self._blockchain.append_block(block_to_add)
-            return True
-        else:
-            # only check 2. above
-            if not self.check_pow_proof(block_to_add, pow_proof):
-                return False
-            # add genesis block
-            block_to_add.set_hash()
-            self._blockchain.append_block(block_to_add)
-            return True
-    
-    @staticmethod
-    def check_pow_proof(block_to_check, pow_proof):
-        # if not (block_to_add._block_hash.startswith('0' * Blockchain.difficulty) and block_to_add._block_hash == pow_proof): WRONG
-        # shouldn't check the block_hash directly as it's not trustworthy and it's also private
-        # pdb.set_trace()
-        # Why this is None?
-        # block_to_check_without_hash = copy.deepcopy(block_to_check).remove_block_hash_to_verify_pow()
-        # block_to_check_without_hash = copy.deepcopy(block_to_check)
-        # block_to_check_without_hash.remove_block_hash_to_verify_pow()
-
-        return pow_proof.startswith('0' * Blockchain.difficulty) and pow_proof == block_to_check.compute_hash()
-
-    ''' consensus algorithm for the longest chain '''
-    
-    # TODO Debug and write
-    @classmethod
-    def check_chain_validity(cls, chain_to_check):
-        chain_len = chain_to_check.get_chain_length()
-        if chain_len == 0:
-            pass
-        elif chain_len == 1:
-            pass
-        else:
-            for block in chain_to_check[1:]:
-                if cls.check_pow_proof(block, block.get_block_hash()) and block.get_previous_hash == chain_to_check[chain_to_check.index(block) - 1].compute_hash(hash_previous_block=True):
-                    pass
-                else:
-                    return False
-        return True
-
-    # TODO
-    # init=True called in register_with_existing_node()
-    def consensus(self, init=False):
-        """
-        Simple consensus algorithm - if a longer valid chain is found, the current device's chain is replaced with it.
-        """
-
-        longest_chain = None
-        chain_len = self._blockchain.get_chain_length()
-
-        for node in peers:
-            response = requests.get(f'{node}/get_chain_meta')
-            length = response.json()['length']
-            chain = response.json()['chain']
-            chain_len_check = False
-            if init == True:
-                if length >= chain_len:
-                    chain_len_check = True
-            else:
-                 if length > chain_len:
-                    chain_len_check = True
-            if chain_len_check and self.check_chain_validity(chain):
-                # Longer valid chain found!
-                chain_len = length
-                longest_chain = chain
-
-        if longest_chain:
-            self._blockchain._chain = longest_chain
-            return True
-
-        return False
 
 def jump_to_download_or_next_epoch_warning():
     global mute_warining
@@ -1041,67 +694,13 @@ def display_chain():
         print("_block_hash", block["_block_hash"])
     return "Chain Returned in Port Console"
 
-@app.route('/get_chain_meta', methods=['GET'])
-def query_blockchain():
-    chain_data = []
-    for block in device.get_blockchain()._chain:
-        chain_data.append(block.__dict__)
-    return json.dumps({"length": len(chain_data),
-                       "chain": chain_data,
-                       "peers": list(peers)})
-
-
-@app.route('/get_peers', methods=['GET'])
-def query_peers():
-    return json.dumps({"peers": list(peers)})
-
-
-# TODO helper function used in register_with_existing_node() only while registering node
-def sync_chain_from_dump(chain_dump):
-    # print("sync_chain_from_dump() called by miner")
-    # generated_blockchain.create_genesis_block()
-    for block_data in chain_dump:
-        # if idx == 0:
-        #     continue  # skip genesis block
-        block = Block(block_data["_idx"],
-                      block_data["_transactions"],
-                      block_data["_block_generation_time"],
-                      block_data["_previous_hash"],
-                      block_data["_nonce"])
-        pow_proof = block_data['_block_hash']
-        # in add_block, check if pow_proof and previous_hash fileds both are valid
-        added = device.add_block(block, pow_proof)
-        if not added:
-            raise Exception("The chain dump is tampered!!")
-            return False
-        return True
-    # return generated_blockchain
-
-
-
 ''' add node to the network '''
 
 # endpoint to add new peers to the network.
 # why it's using POST here?
 @app.route('/register_node', methods=['POST'])
-def register_new_peers():
-    node_address = request.get_json()["registerer_node_address"]
-    if not node_address:
-        return "Invalid data", 400
-
-    transferred_this_node_address = request.get_json()["registerer_with_node_address"]
-    if device.get_ip_and_port() == None:
-        # this is a dirty hack for the first node in the network to set its ip and node and used to remove itself from peers
-        device.set_ip_and_port(transferred_this_node_address)
-    if device.get_ip_and_port() != transferred_this_node_address:
-        return "This should never happen"
-
-    # Add the node to the peer list
-    peers.add(node_address)
-    if DEBUG_MODE:
-            print("register_new_peers() called, peers", repr(peers))
-    # Return the consensus blockchain to the newly registered node so that the new node can sync
-    return query_blockchain()
+def register_node():
+    pass
 
 
 @app.route('/register_with', methods=['POST'])
@@ -1110,64 +709,16 @@ def register_with_existing_node():
     Internally calls the `register_node` endpoint to register current node with the node specified in the
     request, and sync the blockchain as well as peer data.
     """
-    # assign ip and port for itself, mainly used to remove itself from peers list
-    device.set_ip_and_port(request.host_url[:-1])
+    pass
 
-    register_with_node_address = request.get_json()["register_with_node_address"]
-    if not register_with_node_address:
-        return "Invalid request - must specify a register_with_node_address!", 400
-    data = {"registerer_node_address": request.host_url[:-1], "registerer_with_node_address": register_with_node_address}
-    headers = {'Content-Type': "application/json"}
-
-    # Make a request to register with remote node and obtain information
-    response = requests.post(register_with_node_address + "/register_node", data=json.dumps(data), headers=headers)
-
-    if response.status_code == 200:
-        # global blockchain
-        # global peers
-        # add the register_with_node_address as a peer
-        peers.add(register_with_node_address)
-        # sync the chain
-        chain_data_dump = response.json()['chain']
-        # update peer list according to the register-with node
-        peers.update(response.json()['peers'])
-        is_synced = sync_chain_from_dump(chain_data_dump)
-        while not is_synced:
-            resyncing_wait_time = 5
-            print("Chain syncing failed. Update peer list and resync.")
-            device.update_peers()
-            if peers and device.consensus(init=True):
-                break
-            else:
-                print("This shall never be called.")
-        device.post_resync_linear_regression()
-        # NO NO NO sync the global weight from this register_with_node
-        # TODO that might be just a string!!!
-        # global_weight_to_sync = response.json()['global_weight_vector']
-        # change to let node calculate global_weight_vector block by block
-
-        # remove itself if there is
-        try:
-            if DEBUG_MODE:
-                print("Self IP and Port", device.get_ip_and_port())
-            peers.remove(device.get_ip_and_port())
-        except:
-            pass
-        if DEBUG_MODE:
-            print("register_with_existing_node() called, peers", repr(peers))
-        return "Registration successful", 200
-    else:
-        # if something goes wrong, pass it on to the API response
-        # return response.content, response.status_code, "why 404"
-        return "weird"
-
-
-# TODO
-# block add time can use another list to store if necessary
 
 
 ''' debug methods '''
-# debug peer var
-@app.route('/debug_peers', methods=['GET'])
-def debug_peers():
-    return repr(peers)
+@app.route('/get_chain_meta', methods=['GET'])
+def query_blockchain():
+    pass
+
+@app.route('/get_peers', methods=['GET'])
+def query_peers():
+    return json.dumps({"peers": list(peers)})
+
