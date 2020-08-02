@@ -1,3 +1,7 @@
+from device import *
+from utils import *
+import utils
+
 import pdb
 
 from flask import Flask, request
@@ -328,11 +332,7 @@ def jump_to_download_or_next_epoch_warning():
 #         # TODO make return more reasonable
 #         return "error"
 
-app = Flask(__name__)
 
-@app.route('/get_role', methods=['GET'])
-def return_role():
-    return "Miner"
 
 
 # used while worker uploading the updates. 
@@ -443,6 +443,16 @@ def receive_propagated_block():
             return "The received propagated block is not verified. Mining own block continues."
     else:
         return "Propagated block not accepting by this miner."
+
+''' query/debug data '''
+
+@app.route('/running', methods=['GET'])
+def running():
+	return "running", 888
+
+@app.route('/get_role', methods=['GET'])
+def return_role():
+    return "Miner"
 
 ''' App Starts Here '''
 
@@ -700,16 +710,23 @@ def display_chain():
 # why it's using POST here?
 @app.route('/register_node', methods=['POST'])
 def register_node():
-    pass
+	registrant_node_address = request.get_json()["registrant_node_address"]
+	if not registrant_node_address:
+		return "Invalid data", 400
+	return device.register_node(registrant_node_address)
 
 
 @app.route('/register_with', methods=['POST'])
 def register_with_existing_node():
-    """
-    Internally calls the `register_node` endpoint to register current node with the node specified in the
-    request, and sync the blockchain as well as peer data.
-    """
-    pass
+	"""
+	Calls the `register_node` endpoint at the registrar to register current node, and sync the blockchain as well as peer data from the registrar.
+	"""
+	registrar_node_address = request.get_json()["registrar_node_address"]
+	if not registrar_node_address:
+		return "Invalid data", 400
+	if device.register_with_existing_node(registrar_node_address):
+		print(f"Node {device.get_ip_and_port()} registered with {registrar_node_address}. This node's current peer list is {device.get_peers()}")
+		return "Success", 201
 
 
 
@@ -722,3 +739,11 @@ def query_blockchain():
 def query_peers():
     return json.dumps({"peers": list(peers)})
 
+def main():
+	ip, port, registrar_ip_port = utils.parse_commands()
+	this_node_address = f"http://{ip}:{port}"
+	device.set_ip_and_port(this_node_address)
+	utils.start_flask_app(ip, port, this_node_address, registrar_ip_port)
+
+if __name__ == "__main__":
+	main()
