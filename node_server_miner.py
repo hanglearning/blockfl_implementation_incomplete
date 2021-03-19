@@ -849,11 +849,11 @@ def sync_chain_from_dump(chain_dump):
 # why it's using POST here?
 @app.route('/register_node', methods=['POST'])
 def register_new_peers():
-    node_address = request.get_json()["registerer_node_address"]
-    if not node_address:
+    registrant_node_address = request.get_json()["registrant_node_address"]
+    if not registrant_node_address:
         return "Invalid data", 400
 
-    transferred_this_node_address = request.get_json()["registerer_with_node_address"]
+    transferred_this_node_address = request.get_json()["registrar_node_address"]
     if device.get_ip_and_port() == None:
         # this is a dirty hack for the first node in the network to set its ip and node and used to remove itself from peers
         device.set_ip_and_port(transferred_this_node_address)
@@ -861,7 +861,7 @@ def register_new_peers():
         return "This should never happen"
 
     # Add the node to the peer list
-    peers.add(node_address)
+    peers.add(registrant_node_address)
     if DEBUG_MODE:
             print("register_new_peers() called, peers", repr(peers))
     # Return the consensus blockchain to the newly registered node so that the new node can sync
@@ -877,20 +877,20 @@ def register_with_existing_node():
     # assign ip and port for itself, mainly used to remove itself from peers list
     device.set_ip_and_port(request.host_url[:-1])
 
-    register_with_node_address = request.get_json()["register_with_node_address"]
-    if not register_with_node_address:
-        return "Invalid request - must specify a register_with_node_address!", 400
-    data = {"registerer_node_address": request.host_url[:-1], "registerer_with_node_address": register_with_node_address}
+    registrar_node_address = request.get_json()["registrar_node_address"]
+    if not registrar_node_address:
+        return "Invalid request - must specify a registrar_node_address!", 400
+    data = {"registrant_node_address": request.host_url[:-1], "registrar_node_address": registrar_node_address}
     headers = {'Content-Type': "application/json"}
 
     # Make a request to register with remote node and obtain information
-    response = requests.post(register_with_node_address + "/register_node", data=json.dumps(data), headers=headers)
+    response = requests.post(registrar_node_address + "/register_node", data=json.dumps(data), headers=headers)
 
     if response.status_code == 200:
         # global blockchain
         global peers
-        # add the register_with_node_address as a peer
-        peers.add(register_with_node_address)
+        # add the registrar_node_address as a peer
+        peers.add(registrar_node_address)
         # sync the chain
         chain_data_dump = response.json()['chain']
         sync_chain_from_dump(chain_data_dump)
