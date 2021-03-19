@@ -204,7 +204,7 @@ class Miner:
             response = requests.get(f'{node}/get_role')
             if response.status_code == 200:
                 if response.text == 'Miner':
-                    response2 = requests.get(f'{node}/get_miner_epoch')
+                    response2 = requests.get(f'{node}/get_miner_comm_round')
                     if response2.status_code == 200:
                         if int(response2.text) == device.get_current_epoch():
                             self._current_epoch_miner_nodes.add(node)
@@ -519,7 +519,7 @@ app = Flask(__name__)
 # pre-defined and agreed fields
 # miner use these values to verify data validity
 DATA_DIM = 3
-SAMPLE_SIZE = 2
+SAMPLE_SIZE = 5
 # miner waits for 180s to fill its candidate block with updates from devices
 MINER_WAITING_UPLOADS_PERIOD = 10
 
@@ -555,8 +555,8 @@ def return_role():
 
 # used while worker uploading the updates. 
 # If epoch doesn't match, one of the entity has to resync the chain
-@app.route('/get_miner_epoch', methods=['GET'])
-def get_miner_epoch():
+@app.route('/get_miner_comm_round', methods=['GET'])
+def get_miner_comm_round():
     if device.is_miner():
         return str(device.get_current_epoch())
     else:
@@ -658,7 +658,7 @@ def runApp():
     # wait for worker maximum wating time
 
     while True: 
-        print(f"Starting epoch {device.get_current_epoch()}...\n")
+        print(f"Starting communication round {device.get_current_epoch()}...\n")
         print(f"{PROMPT} This is Miner with ID {device.get_idx()}\n")
         #TODO recheck peer validity and remove offline peers
         # hopfully network delay won't cause bug if like the propagated block is added at the moment we clear _has_added_propagated_block to True. Though low odds, still have to think about it
