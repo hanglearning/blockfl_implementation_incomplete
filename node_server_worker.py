@@ -409,7 +409,7 @@ class Worker:
                 myfile.write(str(abs(self._global_weight_vector.t()@data_point['x']-data_point['y']))+'\n')
         print("====================")
         print("Global Update Done.")
-        print("Press ENTER to continue to the next epoch...")
+        print("Press ENTER to continue to the next communication round...")
 
     # TODO
     def worker_global_update_SVRG(self):
@@ -433,7 +433,7 @@ class Worker:
         self._global_weight_vector += global_weight_tensor_accumulator
         print('self._global_weight_vector', self._global_weight_vector)
         print("Global Update Done.")
-        print("Press ENTER to continue to the next epoch...")
+        print("Press ENTER to continue to the next communication round...")
 
     ''' Common Methods '''
 
@@ -583,12 +583,12 @@ def runApp():
     # TODO change to < EPSILON
     epochs = 0
     while epochs < 150: 
-        print(f"\nStarting epoch {device.get_current_epoch()}...\n")
+        print(f"\nStarting communication round {device.get_current_epoch()}...\n")
         print(f"{PROMPT} This is workder with ID {device.get_idx()}")
         # while registering, chain was synced, if any
         if DEBUG_MODE:
-            print("\nStep1. first let worker do local updates.\n")
-            # cont = input("\nStep1. first let worker do local updates. Continue?\n")
+            # print("\nStep1. first let worker do local updates.\n")
+            cont = input("\nStep1. first let worker do local updates. Continue?\n")
         print(f"{PROMPT} Worker is performing Step1 - local update...\n")
         # upload = device.worker_local_update()
         upload = device.worker_local_update_linear_regresssion()
@@ -601,8 +601,8 @@ def runApp():
             print(f"computation_time: {upload['computation_time']}")
         # worker associating with miner
         if DEBUG_MODE:
-            # cont = input("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner. Continue?\n")
-            print("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner.\n")
+            cont = input("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner. Continue?\n")
+            # print("\nStep2. Now, worker will associate with a miner in its peer list and upload its updates to this miner.\n")
         miner_address = device.worker_associate_miner_with_same_epoch()
         # if DEBUG_MODE:
         #     print("miner_address", miner_address)

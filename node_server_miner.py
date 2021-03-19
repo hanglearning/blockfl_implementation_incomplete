@@ -250,14 +250,14 @@ class Miner:
                 if response.status_code == 200:
                     print(f'Requested Worker {worker} to download the block.')
         else:
-            print("No associated workers this round. Begin Next epoch.")
+            print("No associated workers this round. Begin Next communication round.")
             
     
     # TODO rewards
     # TODO need a timer
-    def cross_verification_skipped(self):
+    def cross_verification(self):
         if DEBUG_MODE:
-            print("cross_verification() called, initial rewards ", self._rewards)
+            print("cross_verification() called, first do self- then cross-verification, initial rewards ", self._rewards)
             # pdb.set_trace()
         # Block index starting at 0
         candidate_block = Block(idx=self._blockchain.get_chain_length())
@@ -276,7 +276,7 @@ class Miner:
         if self._received_transactions:
             print("\nVerifying received updates from associated workers...")
             for update in self._received_transactions:
-                if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM and len(update['global_gradients_per_data_point']) == SAMPLE_SIZE:
+                if len(update['feature_gradients']['feature_gradients_list']) == DATA_DIM:
                     candidate_block.add_verified_transaction(update)
                     print(f"Updates from worker {update['worker_ip']}({update['worker_id']}) are verified.")
                     print(f"This miner now sends rewards to the above worker for the provision of data by the SAMPLE_SIZE {SAMPLE_SIZE}")
@@ -298,7 +298,7 @@ class Miner:
                 print("\nVerifying broadcasted updates from other miners...")
                 # pdb.set_trace()
                 for update in update_from_other_miner['received_updates']:
-                    if len(update['local_weight_update']['update_tensor_to_list']) == DATA_DIM and len(update['global_gradients_per_data_point']) == SAMPLE_SIZE:
+                    if len(update['feature_gradients']['feature_gradients_list']) == DATA_DIM:
                         candidate_block.add_verified_transaction(update)
                         print(f"Updates from miner {update_from_other_miner['from_miner_ip']}({update_from_other_miner['from_miner_id']}) for worker {update['worker_ip']}({update['worker_id']}) are verified.")
                     else:
@@ -315,8 +315,8 @@ class Miner:
         return candidate_block
 
     # TEST FOR CONVERGENCE
-    def cross_verification(self):
-        print("SKIP REWARDS FOR CONVERGENCE TEST")
+    def cross_verification_skipped(self):
+        # print("SKIP REWARDS FOR CONVERGENCE TEST")
         candidate_block = Block(idx=self._blockchain.get_chain_length())
         candidate_block.set_block_generation_time()
         if self._received_transactions:
@@ -416,8 +416,10 @@ class Miner:
                 #     print(f"miner_mine_block() called, with pow_proof {pow_proof}")
                 return pow_proof, mined_block
             else:
-                print("No transaction to mine.")
+                print("No transaction to mine. \nGo to the next communication round.")
+                return None, None
                 #TODO Skip or wait and go to the next epoch
+
         else:
             print("Worker does not mine transactions.")
 
@@ -541,7 +543,7 @@ def miner_set_wait_time():
         print(f"{PROMPT} Miner wait time set to {MINER_WAITING_UPLOADS_PERIOD}s, waiting for updates...")
         time.sleep(MINER_WAITING_UPLOADS_PERIOD)
         miner_accept_updates = False
-        print(f"{PROMPT} Miner done accepting updates in this epoch.")
+        print(f"{PROMPT} Miner done accepting updates in this communication round.")
     else:
         # TODO make return more reasonable
         return "error"
@@ -692,8 +694,8 @@ def runApp():
         if not device.is_propagated_block_added():
             # miner broadcast received local updates
             if DEBUG_MODE:
-                # cont = input("Next, miners broadcast its received updates to other miners, and in the same time accept the broadcasted updates from other miners as well. Continue?\n")
-                print("Next, miners broadcast its received updates to other miners, and in the same time accept the broadcasted updates from other miners as well.\n")
+                cont = input("Next, miners broadcast its received updates to other miners, and in the same time accept the broadcasted updates from other miners as well. Continue?\n")
+                # print("Next, miners broadcast its received updates to other miners, and in the same time accept the broadcasted updates from other miners as well.\n")
             device.miner_broadcast_updates()
         else:
             print("NOTE: A propagated block has been added. Jump to request worker download.")
@@ -712,55 +714,64 @@ def runApp():
         if not device.is_propagated_block_added():
             # TODO verify uploads? How?
             if DEBUG_MODE:
-                #cont = input("\nNext self and cross verification. Continue?\n")
-                print("\nNext self and cross verification.\n")
+                cont = input("\nNext self and cross verification. Continue?\n")
+                # print("\nNext self and cross verification.\n")
             candidate_block = device.cross_verification()
         else:
             print("NOTE: A propagated block has been added. Jump to request worker download.")
             pass
 
+        pow_proof, mined_block = None, None
         if not device.is_propagated_block_added():
             # miner mine transactions by PoW on this candidate_block
             if DEBUG_MODE:
-                # cont = input("\nNext miner mines its own block. Continue?\n")
-                print("\nNext miner mines its own block.\n")
+                cont = input("\nNext miner mines its own block. Continue?\n")
+                # print("\nNext miner mines its own block.\n")
             if not device.is_propagated_block_added():
                 pow_proof, mined_block = device.miner_mine_block(candidate_block)
+                if pow_proof == None or mined_block == None:
+                    pass
             else:
                 print("NOTE: A propagated block has been added. Jump to request worker download.")
         else:
             print("NOTE: A propagated block has been added. Jump to request worker download.")
             pass
         
-        # if not device.is_propagated_block_added():
-        #     # block_propagation
-        #     # TODO if miner_mine_block returns none, which means it gets aborted, then it does not run propagate_the_block and add its own block. If not, run the next two.
-        #     if DEBUG_MODE:
-        #         cont = input("\nNext miner_propagate_the_block. Continue?\n")
-        #     if not device.is_propagated_block_added():
-        #         device.miner_propagate_the_block(mined_block, pow_proof)
-        #     else:
-        #         print("NOTE: A propagated block has been added. Jump to request worker download.")
-        # else:
-        #     print("NOTE: A propagated block has been added. Jump to request worker download.")
-        #     pass
-
         if not device.is_propagated_block_added():
-            # add its own block
-            # TODO fork ACK?
+            if pow_proof == None or mined_block == None:
+                pass
+            # block_propagation
+            # TODO if miner_mine_block returns none, which means it gets aborted, then it does not run propagate_the_block and add its own block. If not, run the next two.
             if DEBUG_MODE:
-                # cont = input("\nNext miner adds its own block. Continue?\n")
-                print("\nNext miner adds its own block.\n")
-            if device.add_block(mined_block, pow_proof):
-                print("Its own block has been added.")
+                cont = input("\nNext miner_propagate_the_block. Continue?\n")
+            if not device.is_propagated_block_added():
+                device.miner_propagate_the_block(mined_block, pow_proof)
+            else:
+                print("NOTE: A propagated block has been added. Jump to request worker download.")
         else:
             print("NOTE: A propagated block has been added. Jump to request worker download.")
             pass
 
+        if not device.is_propagated_block_added():
+            if pow_proof == None or mined_block == None:
+                pass
+            # add its own block
+            # TODO fork ACK?
+            if DEBUG_MODE:
+                cont = input("\nNext miner adds its own block. Continue?\n")
+                # print("\nNext miner adds its own block.\n")
+            if device.add_block(mined_block, pow_proof):
+                print("Its own block has been added.")
+            else:
+                print("NOTE: A propagated block has been added. Jump to request worker download.")
+                pass
+
         # send updates to its associated miners
         if DEBUG_MODE:
-            # cont = input("\nNext request_associated_workers_download. Continue?\n")
-            print("\nNext request_associated_workers_download.\n")
+            if pow_proof == None or mined_block == None:
+                pass
+            cont = input("\nNext request_associated_workers_download. Continue?\n")
+            # print("\nNext request_associated_workers_download.\n")
             if device.is_propagated_block_added():
                 # download the added propagated block
                 device.request_associated_workers_download(device.get_propagated_block_pow())
