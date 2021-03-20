@@ -3,6 +3,11 @@
 From Paper - https://arxiv.org/abs/1808.03949 
 Blockchain Structure Tutorial - https://github.com/satwikkansal/python_blockchain_app/tree/ibm_blockchain_post
 
+### 🔴IMPORTANT❗🔴
+This repo has been deprecated and is unlikely to receive further updates.
+
+This repo hosts an incomplete and immature BlockFL implementation in Python, and the overall codebase may have limited research value. However, you may find it worthwhile to reuse some of the functions written in this repo and extend it in your own work. This repo also has an executable version of the code in the dev branch. If interested, please watch the following YouTube video to understand the execution steps and see which parts of the code you may wish to reuse
+https://www.youtube.com/watch?v=rL1S6vQn_wM
 ### Envs used for this repo
 ```
 python 3.7.7
