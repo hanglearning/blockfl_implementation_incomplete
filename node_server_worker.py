@@ -226,7 +226,7 @@ class Worker:
                 response = requests.get(f'{node}/get_role')
                 if response.status_code == 200:
                     if response.text == 'Miner':
-                        response2 = requests.get(f'{node}/get_miner_epoch')
+                        response2 = requests.get(f'{node}/get_miner_comm_round')
                         if response2.status_code == 200:
                             if int(response2.text) == self.get_current_epoch():
                                 miner_nodes.add(node)
@@ -259,7 +259,7 @@ class Worker:
             if response.status_code == 200:
                 if response.text == 'Miner':
                     # check if worker and miner are in the same epoch
-                    response_epoch = requests.get(f'{miner_address}/get_miner_epoch')
+                    response_epoch = requests.get(f'{miner_address}/get_miner_comm_round')
                     if response_epoch.status_code == 200:
                         miner_epoch = int(response_epoch.text)
                         if miner_epoch == self.get_current_epoch():
