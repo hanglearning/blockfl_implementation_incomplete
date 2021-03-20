@@ -1,4 +1,4 @@
-# BlockFL implementation
+# BlockFL implementation (INCOMPLETE, Please Read IMPORTANT)
 
 From Paper - https://arxiv.org/abs/1808.03949 
 Blockchain Structure Tutorial - https://github.com/satwikkansal/python_blockchain_app/tree/ibm_blockchain_post
